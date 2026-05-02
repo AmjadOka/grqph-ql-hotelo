@@ -1,0 +1,424 @@
+# ------------------------------------------------------
+# THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
+# ------------------------------------------------------
+
+type Cabin {
+  _id: ID!
+  name: String!
+  maxCapacity: Int!
+  regularPrice: Float!
+  discount: Float!
+  image: String!
+  description: String!
+  ratingAvg: Float!
+  ratingCount: Int!
+}
+
+type CabinMeta {
+  total: Int!
+  page: Int!
+  limit: Int!
+  totalPages: Int!
+}
+
+type CabinsResponse {
+  data: [Cabin!]!
+  meta: CabinMeta!
+}
+
+type User {
+  id: ID!
+  fullName: String!
+  email: String!
+  role: UserRole!
+  gender: String
+  avatar: String
+  phoneNumber: String
+  address: String
+  active: Boolean!
+}
+
+enum UserRole {
+  GUEST
+  EMPLOYEE
+  MANAGER
+}
+
+type UserMeta {
+  total: Int!
+  page: Int!
+  limit: Int!
+  totalPages: Int!
+}
+
+type UsersResponse {
+  data: [User!]!
+  meta: UserMeta!
+}
+
+type AuthResponse {
+  status: Int!
+  message: String!
+  accessToken: String
+  refreshToken: String
+  data: User
+}
+
+type MessageResponse {
+  status: Int!
+  message: String!
+}
+
+type Booking {
+  cabin: Cabin!
+  guest: User!
+  startDate: DateTime!
+  endDate: DateTime!
+  numNights: Int!
+  numGuests: Int!
+  hasBreakfast: Boolean!
+  observations: String
+  cabinPrice: Float!
+  extrasPrice: Float!
+  totalPrice: Float!
+  status: BookingStatus!
+  paymentStatus: PaymentStatus!
+  isPaid: Boolean!
+  active: Boolean!
+  paymentDueAt: DateTime
+  cancelReason: String
+  cancelledAt: DateTime
+  cancelledBy: ID
+  checkedInAt: DateTime
+  checkedOutAt: DateTime
+  expiredAt: DateTime
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+"""
+A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date-time format.
+"""
+scalar DateTime
+
+"""Lifecycle status of a booking"""
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED_BY_GUEST
+  CANCELLED_BY_ADMIN
+  CANCELLED_SYSTEM
+  NO_SHOW
+  EXPIRED
+}
+
+"""Payment state of a booking"""
+enum PaymentStatus {
+  UNPAID
+  AUTHORIZED
+  PAID
+  PARTIALLY_REFUNDED
+  REFUNDED
+  FAILED
+}
+
+type BookingResponse {
+  status: Int!
+  message: String!
+  data: Booking
+}
+
+type BookingMeta {
+  total: Int!
+  page: Int!
+  limit: Int!
+  totalPages: Int!
+}
+
+type BookingListResponse {
+  status: Int!
+  message: String!
+  data: [Booking!]!
+  meta: BookingMeta!
+}
+
+type DeleteResponse {
+  status: Int!
+  message: String!
+}
+
+type Settings {
+  _id: ID!
+  minBookingLength: Int!
+  maxBookingLength: Int!
+  maxGuestsPerBooking: Int!
+  breakfastPrice: Float!
+}
+
+type UploadResponse {
+  url: String!
+  publicId: String!
+  folder: String!
+}
+
+type Review {
+  user: ID!
+  cabin: ID!
+  rating: Int!
+  comment: String
+  isEdited: Boolean!
+  editedAt: DateTime
+}
+
+type ReviewMeta {
+  total: Int!
+  page: Int!
+  limit: Int!
+  totalPages: Int!
+}
+
+type ReviewPaginatedData {
+  data: [Review!]!
+  meta: ReviewMeta!
+}
+
+type ReviewListResponse {
+  status: Int!
+  message: String!
+  data: ReviewPaginatedData!
+}
+
+type ReviewResponse {
+  status: Int!
+  message: String!
+  data: Review
+}
+
+type DeleteReviewResponse {
+  status: Int!
+  message: String!
+  success: Boolean!
+}
+
+type Query {
+  """List all cabins with optional filtering and pagination"""
+  cabins(query: CabinQueryInput): CabinsResponse!
+
+  """Retrieve a single cabin by ID"""
+  cabin(id: ID!): Cabin!
+  findAllUsers(query: UserQueryInput): UsersResponse!
+  user(id: ID!): User!
+  me: User!
+
+  """Retrieve the authenticated guest's booking history"""
+  myBookings: BookingListResponse!
+
+  """Retrieve a single booking by ID"""
+  booking(id: ID!): BookingResponse!
+
+  """Retrieve all bookings with optional filtering (admin/manager)"""
+  allBookings(query: BookingQueryInput): BookingListResponse!
+  settings: Settings!
+
+  """Get paginated reviews for a specific cabin (public)"""
+  cabinReviews(cabinId: ID!, query: ReviewQueryInput): ReviewListResponse!
+
+  """Get the authenticated user's own reviews"""
+  myReviews(query: ReviewQueryInput): ReviewListResponse!
+
+  """List all reviews with optional filters (manager only)"""
+  reviews(query: ReviewQueryInput): ReviewListResponse!
+}
+
+input CabinQueryInput {
+  page: Int = 1
+  limit: Int = 10
+  search: String
+  minCapacity: Int
+  minPrice: Float
+  maxPrice: Float
+  sortBy: String = "createdAt"
+  sortOrder: String = "desc"
+}
+
+input UserQueryInput {
+  page: Int = 1
+  limit: Int = 10
+  search: String
+  role: UserRole
+  sortBy: String = "createdAt"
+  sortOrder: String = "desc"
+  active: Boolean
+}
+
+input BookingQueryInput {
+  page: Int = 1
+  limit: Int = 10
+  search: String
+  sortBy: String
+  sortOrder: String = "desc"
+  cabinId: String
+  guestId: String
+  status: BookingStatus
+  startDate: String
+  endDate: String
+}
+
+input ReviewQueryInput {
+  search: String
+  cabinId: ID
+  userId: ID
+  page: Int
+  limit: Int
+  sortBy: String
+  sortOrder: String
+}
+
+type Mutation {
+  """Create a new cabin (manager only)"""
+  createCabin(input: CreateCabinInput!): Cabin!
+
+  """Update a cabin by ID (manager only)"""
+  updateCabin(id: ID!, input: UpdateCabinInput!): Cabin!
+
+  """Delete a cabin by ID (manager only)"""
+  removeCabin(id: ID!): Boolean!
+  updateUser(id: ID!, input: UpdateUserInput!): User!
+  deleteUser(id: ID!): Boolean!
+  signUp(input: SignUpInput!): AuthResponse!
+  login(input: SignInInput!): AuthResponse!
+  refreshToken(refreshToken: String!): AuthResponse!
+  logout(userId: String!): MessageResponse!
+  resetPassword(input: ResetPasswordInput!): MessageResponse!
+  verifyCode(input: VerifyCodeInput!): MessageResponse!
+  changePassword(input: ChangePasswordInput!): MessageResponse!
+
+  """Create a new booking (guest only)"""
+  createBooking(input: CreateBookingInput!): BookingResponse!
+
+  """Update an existing booking (owner or manager)"""
+  updateBooking(id: ID!, input: UpdateBookingInput!): BookingResponse!
+
+  """Cancel a booking (owner or manager/admin)"""
+  cancelBooking(id: ID!, reason: String): DeleteResponse!
+
+  """Confirm payment and activate a pending booking (staff only)"""
+  confirmBooking(id: ID!): BookingResponse!
+
+  """Check in a confirmed booking (staff only)"""
+  checkIn(id: ID!): BookingResponse!
+
+  """Check out an active stay (staff only)"""
+  checkOut(id: ID!): BookingResponse!
+
+  """Mark a booking as no-show (staff only)"""
+  markNoShow(id: ID!): BookingResponse!
+  updateSettings(input: UpdateSettingsInput!): Settings!
+  uploadCabinImage(file: Upload!): UploadResponse!
+  uploadFiles(files: [Upload!]!): [String!]!
+  uploadAvatar(file: Upload!): UploadResponse!
+  deleteAvatar: Boolean!
+
+  """Submit a review for a cabin (authenticated users)"""
+  createReview(input: CreateReviewInput!): ReviewResponse!
+
+  """Update your own review"""
+  updateReview(input: UpdateReviewInput!): ReviewResponse!
+
+  """Delete a review (owner or manager)"""
+  deleteReview(id: ID!): DeleteReviewResponse!
+}
+
+input CreateCabinInput {
+  name: String!
+  maxCapacity: Int!
+  regularPrice: Float!
+  discount: Float
+  description: String!
+  image: String!
+}
+
+input UpdateCabinInput {
+  name: String
+  maxCapacity: Int
+  regularPrice: Float
+  discount: Float
+  description: String
+  image: String
+}
+
+input UpdateUserInput {
+  fullName: String
+  email: String
+  password: String
+  role: UserRole = GUEST
+  phoneNumber: String
+  avatar: String
+}
+
+input SignUpInput {
+  name: String!
+  email: String!
+  password: String!
+}
+
+input SignInInput {
+  email: String!
+  password: String!
+}
+
+input ResetPasswordInput {
+  email: String!
+}
+
+input VerifyCodeInput {
+  email: String!
+  code: String!
+}
+
+input ChangePasswordInput {
+  email: String!
+  newPassword: String!
+}
+
+input CreateBookingInput {
+  cabinId: String!
+  startDate: DateTime!
+  endDate: DateTime!
+  numGuests: Int!
+  hasBreakfast: Boolean! = false
+  observations: String
+}
+
+input UpdateBookingInput {
+  cabinId: String
+  startDate: DateTime
+  endDate: DateTime
+  numGuests: Int
+  hasBreakfast: Boolean = false
+  observations: String
+}
+
+input UpdateSettingsInput {
+  minBookingLength: Int
+  maxBookingLength: Int
+  maxGuestsPerBooking: Int
+  breakfastPrice: Float
+}
+
+"""The `Upload` scalar type represents a file upload."""
+scalar Upload
+
+input CreateReviewInput {
+  cabinId: ID!
+  rating: Int!
+  comment: String
+}
+
+input UpdateReviewInput {
+  reviewId: ID!
+  rating: Int
+  comment: String
+}

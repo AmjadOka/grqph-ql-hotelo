@@ -1,0 +1,170 @@
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { User } from './user.schema';
+import { UpdateUserInput } from './dto/update-user.input';
+import * as bcrypt from 'bcrypt';
+import { UserQueryInput } from './dto/create-user.input';
+import { buildQuery } from 'src/common/utils/query-builder';
+
+/**
+ * UserService
+ *
+ * Responsible for all user-related database operations including:
+ * - Querying users with filters, search, pagination
+ * - Retrieving single user records
+ * - Updating user profile
+ * - Managing avatar updates
+ * - Soft deleting users (deactivation)
+ */
+@Injectable()
+export class UserService {
+  constructor(
+    @InjectModel(User.name)
+    private readonly userModel: Model<User>,
+  ) {}
+
+  /**
+   * Retrieve all users with advanced query support.
+   *
+   * Features:
+   * - Search by fullName and email
+   * - Sorting by createdAt (default)
+   * - Field selection (password excluded)
+   * - Custom filtering (active status)
+   *
+   * @param query - Query parameters for filtering, searching, pagination
+   * @returns List of users based on query
+   */
+  async findAll(query: UserQueryInput) {
+    return await buildQuery(this.userModel, query, {
+      searchFields: ['fullName', 'email'],
+      defaultSort: 'createdAt',
+      select: '-password',
+      skipFields: ['active'],
+
+      /**
+       * Custom filter logic
+       * Used to manually control specific query behavior
+       */
+      customFilter(query) {
+        // FIX: proper undefined check
+        if (query.active !== undefined && query.active !== null) {
+          return { active: query.active };
+        }
+
+        return {};
+      },
+    });
+  }
+
+  /**
+   * Find a single user by MongoDB ObjectId.
+   *
+   * @param id - User ID
+   * @throws NotFoundException if user does not exist
+   * @returns User document
+   */
+  async findOne(id: string): Promise<User> {
+    const user = await this.userModel.findById(id);
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return user;
+  }
+
+  /**
+   * Find user by ID with sensitive fields included.
+   *
+   * Used internally (e.g. file upload resolver) where avatar metadata is required.
+   *
+   * @param id - User ID
+   * @returns Lean user object including avatarPublicId
+   */
+  async findById(id: string) {
+    const user = await this.userModel
+      .findById(id)
+      .select('+avatarPublicId')
+      .lean();
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return user;
+  }
+
+  /**
+   * Update user avatar only.
+   *
+   * Used by upload system after file storage (e.g. Cloudinary/S3).
+   *
+   * @param id - User ID
+   * @param data - Avatar URL and publicId
+   * @returns Updated user document
+   */
+  async updateAvatar(id: string, data: { avatarPublicId: string | null }) {
+    return this.userModel.findByIdAndUpdate(
+      id,
+      {
+        avatar: data.avatarPublicId,
+      },
+      { returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * Update user profile data.
+   *
+   * Features:
+   * - Supports partial updates
+   * - Automatically hashes password if provided
+   *
+   * @param id - User ID
+   * @param input - Update payload
+   * @throws NotFoundException if user does not exist
+   * @returns Updated user document
+   */
+  async update(id: string, input: UpdateUserInput) {
+    const user = await this.userModel.findById(id);
+    // Remove any undefined fields
+    Object.keys(input).forEach((key) => {
+      if (input[key] === undefined) {
+        delete input[key];
+      }
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Secure password update handling
+    if (input.password) {
+      input.password = await bcrypt.hash(input.password, 10);
+    }
+
+    return this.userModel.findByIdAndUpdate(id, input, { new: true });
+  }
+
+  /**
+   * Soft delete user by marking them inactive.
+   *
+   * This avoids permanent deletion and preserves data integrity.
+   *
+   * @param id - User ID
+   * @returns true if operation succeeded
+   * @throws NotFoundException if user does not exist
+   */
+  async softDelete(id: string): Promise<boolean> {
+    const user = await this.userModel.findByIdAndUpdate(id, {
+      active: false,
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return true;
+  }
+}
