@@ -17,7 +17,7 @@ import {
   CreateBookingInput,
 } from './dto/create-booking.input';
 import { UpdateBookingInput } from './dto/update-booking.input';
-import { UserRole } from '../user/user.schema';
+import { User, UserRole } from '../user/user.schema';
 import { Roles } from '../common/decorators/roles.decorator';
 import { GqlAuthGuard } from '../common/guards/gql-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -28,6 +28,7 @@ import {
 } from './dto/booking-response.dto';
 import { UserLoader } from './loaders/user.loader';
 import { CabinLoader } from './loaders/cabin.loader';
+import { Cabin } from 'src/cabin/cabin.schema';
 
 /* =====================================================
    RESOLVER
@@ -81,9 +82,9 @@ export class BookingResolver {
    * user queries (N+1).  The loader coalesces them into a single
    * `User.find({ _id: { $in: [...ids] } })` per request tick.
    */
-  @ResolveField()
+  @ResolveField(() => User)
   guest(@Parent() booking: Booking) {
-    return this.userLoader.batch.load(booking.guest.toString());
+    return this.userLoader.batch.load(booking.guestId.toString());
   }
 
   /**
@@ -91,9 +92,9 @@ export class BookingResolver {
    *
    * Same N+1 protection as the guest resolver above.
    */
-  @ResolveField()
+  @ResolveField(() => Cabin)
   cabin(@Parent() booking: Booking) {
-    return this.cabinLoader.batch.load(booking.cabin.toString());
+    return this.cabinLoader.batch.load(booking.cabinId.toString());
   }
 
   /* ─────────────────────────────────────────────────────
@@ -107,13 +108,10 @@ export class BookingResolver {
    */
   @Roles(UserRole.GUEST)
   @UseGuards(GqlAuthGuard)
-  @Query(() => BookingListResponse, {
-    description: "Retrieve the authenticated guest's booking history",
-  })
-  myBookings(@CurrentUser() user: AuthUser) {
+  @Query(() => BookingListResponse)
+  myBookings(@CurrentUser() user: AuthUser): Promise<BookingListResponse> {
     return this.bookingService.findMyBookings(user);
   }
-
   /**
    * Returns a single booking by ID.
    *
@@ -122,16 +120,19 @@ export class BookingResolver {
    */
   @Roles(UserRole.GUEST, UserRole.MANAGER)
   @UseGuards(GqlAuthGuard)
-  @Query(() => BookingResponse, {
-    description: 'Retrieve a single booking by ID',
-  })
-  booking(
+  @Query(() => BookingResponse)
+  async booking(
     @Args('id', { type: () => ID }) id: string,
     @CurrentUser() user: AuthUser,
-  ) {
-    return this.bookingService.findOne(id, user);
-  }
+  ): Promise<BookingResponse> {
+    const booking = await this.bookingService.findOne(id, user);
 
+    return {
+      status: 200,
+      message: 'Booking retrieved successfully',
+      data: booking,
+    };
+  }
   /**
    * Returns a paginated, filtered list of all bookings.
    *
@@ -140,19 +141,17 @@ export class BookingResolver {
    */
   @Roles(UserRole.MANAGER)
   @UseGuards(GqlAuthGuard)
-  @Query(() => BookingListResponse, {
-    description:
-      'Retrieve all bookings with optional filtering (admin/manager)',
-  })
+  @Query(() => BookingListResponse)
   async allBookings(
     @Args('query', { nullable: true }) query: BookingQueryInput,
-  ) {
-    const { data, meta } = await this.bookingService.findAll(query);
+  ): Promise<BookingListResponse> {
+    const result = await this.bookingService.findAll(query);
+
     return {
       status: 200,
-      message: 'Reviews fetched successfully',
-      data,
-      meta,
+      message: 'Bookings retrieved successfully',
+      data: result.data,
+      meta: result.meta,
     };
   }
 
@@ -172,18 +171,22 @@ export class BookingResolver {
    * - No overlapping bookings (cabin or guest)
    * - Price calculation
    */
+
   @Roles(UserRole.GUEST)
   @UseGuards(GqlAuthGuard)
-  @Mutation(() => BookingResponse, {
-    description: 'Create a new booking (guest only)',
-  })
-  createBooking(
+  @Mutation(() => BookingResponse)
+  async createBooking(
     @Args('input') input: CreateBookingInput,
     @CurrentUser() user: AuthUser,
-  ) {
-    return this.bookingService.create(input, user._id);
-  }
+  ): Promise<BookingResponse> {
+    const booking = await this.bookingService.create(input, user._id);
 
+    return {
+      status: 201,
+      message: 'Booking created successfully',
+      data: booking,
+    };
+  }
   /**
    * Updates a booking's dates, cabin, guest count, or options.
    *
@@ -193,15 +196,19 @@ export class BookingResolver {
    */
   @Roles(UserRole.GUEST, UserRole.MANAGER)
   @UseGuards(GqlAuthGuard)
-  @Mutation(() => BookingResponse, {
-    description: 'Update an existing booking (owner or manager)',
-  })
-  updateBooking(
+  @Mutation(() => BookingResponse)
+  async updateBooking(
     @Args('id', { type: () => ID }) id: string,
     @Args('input') input: UpdateBookingInput,
     @CurrentUser() user: AuthUser,
-  ) {
-    return this.bookingService.updateBooking(id, input, user);
+  ): Promise<BookingResponse> {
+    const booking = await this.bookingService.updateBooking(id, input, user);
+
+    return {
+      status: 200,
+      message: 'Booking updated successfully',
+      data: booking,
+    };
   }
 
   /**
@@ -213,15 +220,19 @@ export class BookingResolver {
    */
   @Roles(UserRole.GUEST, UserRole.MANAGER)
   @UseGuards(GqlAuthGuard)
-  @Mutation(() => DeleteResponse, {
-    description: 'Cancel a booking (owner or manager/admin)',
-  })
-  cancelBooking(
+  @Mutation(() => DeleteResponse)
+  async cancelBooking(
     @Args('id', { type: () => ID }) id: string,
     @Args('reason', { nullable: true }) reason: string,
     @CurrentUser() user: AuthUser,
-  ) {
-    return this.bookingService.cancelBooking(id, user, reason);
+  ): Promise<DeleteResponse> {
+    await this.bookingService.cancelBooking(id, user, reason);
+
+    return {
+      status: 200,
+      message: 'Booking cancelled successfully',
+      id,
+    };
   }
 
   /* ─────────────────────────────────────────────────────
@@ -238,11 +249,17 @@ export class BookingResolver {
    */
   @Roles(UserRole.EMPLOYEE, UserRole.MANAGER)
   @UseGuards(GqlAuthGuard)
-  @Mutation(() => BookingResponse, {
-    description: 'Confirm payment and activate a pending booking (staff only)',
-  })
-  confirmBooking(@Args('id', { type: () => ID }) id: string) {
-    return this.bookingService.confirmBooking(id);
+  @Mutation(() => BookingResponse)
+  async confirmBooking(
+    @Args('id', { type: () => ID }) id: string,
+  ): Promise<BookingResponse> {
+    const booking = await this.bookingService.confirmBooking(id);
+
+    return {
+      status: 200,
+      message: 'Booking confirmed successfully',
+      data: booking,
+    };
   }
 
   /**
@@ -253,11 +270,17 @@ export class BookingResolver {
    */
   @Roles(UserRole.EMPLOYEE, UserRole.MANAGER)
   @UseGuards(GqlAuthGuard)
-  @Mutation(() => BookingResponse, {
-    description: 'Check in a confirmed booking (staff only)',
-  })
-  checkIn(@Args('id', { type: () => ID }) id: string) {
-    return this.bookingService.checkIn(id);
+  @Mutation(() => BookingResponse)
+  async checkIn(
+    @Args('id', { type: () => ID }) id: string,
+  ): Promise<BookingResponse> {
+    const booking = await this.bookingService.checkIn(id);
+
+    return {
+      status: 200,
+      message: 'Guest checked in successfully',
+      data: booking,
+    };
   }
 
   /**
@@ -268,11 +291,17 @@ export class BookingResolver {
    */
   @Roles(UserRole.EMPLOYEE, UserRole.MANAGER)
   @UseGuards(GqlAuthGuard)
-  @Mutation(() => BookingResponse, {
-    description: 'Check out an active stay (staff only)',
-  })
-  checkOut(@Args('id', { type: () => ID }) id: string) {
-    return this.bookingService.checkOut(id);
+  @Mutation(() => BookingResponse)
+  async checkOut(
+    @Args('id', { type: () => ID }) id: string,
+  ): Promise<BookingResponse> {
+    const booking = await this.bookingService.checkOut(id);
+
+    return {
+      status: 200,
+      message: 'Guest checked out successfully',
+      data: booking,
+    };
   }
 
   /**
@@ -283,13 +312,17 @@ export class BookingResolver {
    */
   @Roles(UserRole.EMPLOYEE, UserRole.MANAGER)
   @UseGuards(GqlAuthGuard)
-  @Mutation(() => BookingResponse, {
-    description: 'Mark a booking as no-show (staff only)',
-  })
-  markNoShow(
+  @Mutation(() => BookingResponse)
+  async markNoShow(
     @Args('id', { type: () => ID }) id: string,
     @CurrentUser() user: AuthUser,
-  ) {
-    return this.bookingService.markNoShow(id, user);
+  ): Promise<BookingResponse> {
+    const booking = await this.bookingService.markNoShow(id, user);
+
+    return {
+      status: 200,
+      message: 'Booking marked as no-show',
+      data: booking,
+    };
   }
 }

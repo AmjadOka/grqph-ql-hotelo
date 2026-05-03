@@ -29,7 +29,10 @@ export class BookingScheduler {
     this.logger.debug('Running pending booking expiry sweep...');
 
     try {
-      await this.bookingService.autoExpirePendingBookings(true);
+      await this.bookingService.autoExpirePendingBookings({
+        force: true,
+      });
+
       this.logger.debug('Expiry sweep complete');
     } catch (err) {
       this.logger.error('Expiry sweep failed', err);

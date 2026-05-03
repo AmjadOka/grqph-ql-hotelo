@@ -47,7 +47,7 @@ export class ReviewResolver {
   /* =====================================================
      MUTATIONS
   ===================================================== */
-
+  @Roles(UserRole.GUEST)
   @UseGuards(GqlAuthGuard)
   @Mutation(() => ReviewResponse, {
     description: 'Submit a review for a cabin (authenticated users)',
@@ -55,7 +55,10 @@ export class ReviewResolver {
   async createReview(
     @Args('input') input: CreateReviewInput,
     @CurrentUser() user: AuthUser,
-  ): Promise<ReviewResponse> {
+  ) {
+    console.log(6545);
+    console.log(input);
+    console.log(user);
     const review = await this.reviewService.create(user._id, input);
     return {
       status: 201,
@@ -150,7 +153,12 @@ export class ReviewResolver {
   async reviews(
     @Args('query', { nullable: true }) query?: ReviewQueryInput,
   ): Promise<ReviewListResponse> {
-    const result = await this.reviewService.findAll(query ?? {});
-    return { status: 200, message: 'Reviews fetched successfully', ...result };
+    const data = await this.reviewService.findAll(query ?? {});
+
+    return {
+      status: 200,
+      message: 'Reviews fetched successfully',
+      data,
+    };
   }
 }

@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-call */
-/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import {
   Injectable,
   NotFoundException,
@@ -23,6 +21,7 @@ import { UpdateReviewInput } from './dto/update-review.input';
 import { CreateReviewInput } from './dto/create-review.input';
 import { ReviewEvents } from './review.event';
 import { reviewListIndexKey } from './review-stats.listener';
+import { ReviewQueryInput } from './dto/review-query.input';
 
 /** Cache TTL for review lists (seconds) */
 const REVIEW_CACHE_TTL = 60;
@@ -96,26 +95,28 @@ export class ReviewService {
     const { cabinId, rating, comment } = input;
 
     this.assertRatingValid(rating);
+    console.log('STEP 1');
 
-    const cabin = await this.cabinModel.findById(cabinId);
-    if (!cabin) throw new NotFoundException('Cabin not found');
+    const cabinExist = await this.cabinModel.findById(cabinId);
+    if (!cabinExist) throw new NotFoundException('Cabin not found');
+    console.log('STEP 2');
 
     const exists = await this.reviewModel.findOne({
-      user: userId,
-      cabin: cabinId,
+      userId,
+      cabinId,
     });
     if (exists) {
       throw new BadRequestException('You already reviewed this cabin');
     }
 
     const review = await this.reviewModel.create({
-      user: userId,
-      cabin: cabinId,
+      userId,
+      cabinId,
       rating,
       comment,
     });
 
-    this.emitReviewChanged(cabinId);
+    this.emitReviewChanged(cabinId.toString());
     return review;
   }
 
@@ -146,7 +147,7 @@ export class ReviewService {
     const review = await this.reviewModel.findById(reviewId);
     if (!review) throw new NotFoundException('Review not found');
 
-    if (review.user.toString() !== userId) {
+    if (review.userId.toString() !== userId) {
       throw new ForbiddenException('Not allowed');
     }
 
@@ -158,7 +159,7 @@ export class ReviewService {
 
     const saved = await review.save();
 
-    this.emitReviewChanged(review.cabin.toString());
+    this.emitReviewChanged(review.cabinId.toString());
     return saved;
   }
 
@@ -179,11 +180,14 @@ export class ReviewService {
     const review = await this.reviewModel.findById(reviewId);
     if (!review) throw new NotFoundException('Review not found');
 
-    if (review.user.toString() !== user._id && user.role !== UserRole.MANAGER) {
+    if (
+      review.userId.toString() !== user._id &&
+      user.role !== UserRole.MANAGER
+    ) {
       throw new ForbiddenException('Not allowed');
     }
 
-    const cabinId = review.cabin.toString();
+    const cabinId = review.cabinId.toString();
     await this.reviewModel.deleteOne({ _id: reviewId });
 
     this.emitReviewChanged(cabinId);
@@ -223,7 +227,7 @@ export class ReviewService {
    * Invalidated when any of their reviews change (listener handles cabin-level;
    * user-level entries are short-lived via TTL — acceptable trade-off).
    */
-  async findByUser(userId: string, query: BaseQuery) {
+  async findByUser(userId: string, query: ReviewQueryInput) {
     const cacheKey = this.userReviewCacheKey(userId, query);
     const cached = await this.cache.get<ReviewPaginatedResult>(cacheKey);
     if (cached) return cached;
@@ -250,7 +254,7 @@ export class ReviewService {
    * - Miss → query DB, cache result, register key in cabin-scoped index
    * - Invalidation → triggered by `review.changed` event via ReviewStatsListener
    */
-  async findByCabin(cabinId: string, query: BaseQuery) {
+  async findByCabin(cabinId: string, query: ReviewQueryInput) {
     const cacheKey = this.reviewCacheKey(cabinId, query);
     const cached = await this.cache.get<ReviewPaginatedResult>(cacheKey);
     if (cached) return cached;
@@ -272,6 +276,7 @@ export class ReviewService {
   ===================================================== */
 
   private assertRatingValid(rating: number): void {
+    console.log('Rating:', rating);
     if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
       throw new BadRequestException(
         'Rating must be an integer between 1 and 5',

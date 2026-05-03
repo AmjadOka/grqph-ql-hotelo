@@ -13,11 +13,11 @@ export class Review extends Document {
 
   @Field(() => ID)
   @Prop({ type: Types.ObjectId, ref: User.name, required: true, index: true })
-  user: Types.ObjectId;
+  userId: Types.ObjectId;
 
   @Field(() => ID)
   @Prop({ type: Types.ObjectId, ref: Cabin.name, required: true, index: true })
-  cabin: Types.ObjectId;
+  cabinId: Types.ObjectId;
 
   /* =========================
      REVIEW DATA

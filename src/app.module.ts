@@ -27,12 +27,12 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '2d' },
+        signOptions: { expiresIn: '1d' },
       }),
     }),
-    EventEmitterModule.forRoot(), // add here globally
+    EventEmitterModule.forRoot(),
     CacheModule.register({
-      isGlobal: true, // already global, no need in ReviewModule
+      isGlobal: true,
       store: redisStore as any,
       host: 'localhost',
       port: 6379,
@@ -49,8 +49,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
         reply,
       }),
     }),
-    MongooseModule.forRoot('mongodb://localhost:27017/Hotelo'),
-
+    MongooseModule.forRoot('mongodb://127.0.0.1:27017/Hotelo?replicaSet=rs0'),
     ScheduleModule.forRoot(),
 
     CabinModule,

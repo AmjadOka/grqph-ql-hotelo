@@ -18,7 +18,8 @@ import {
   CreateBookingInput,
 } from './dto/create-booking.input';
 import { UpdateBookingInput } from './dto/update-booking.input';
-import { buildQuery } from '../common/utils/query-builder';
+import { buildQuery, PaginatedResult } from '../common/utils/query-builder';
+import { BookingListResponse } from './dto/booking-response.dto';
 
 /* =====================================================
    TYPES
@@ -124,7 +125,7 @@ export class BookingService {
    * Returns true when the acting user owns the booking.
    */
   private isBookingOwner(booking: Booking, userId: string): boolean {
-    return booking.guest.toString() === userId;
+    return booking.guestId.toString() === userId;
   }
 
   /**
@@ -263,15 +264,25 @@ export class BookingService {
     const { cabinId, guestId, start, end, excludeId, session } = params;
     const baseFilter = this.buildConflictFilter(start, end, excludeId);
 
-    const [cabinConflict, guestConflict] = await Promise.all([
-      this.bookingModel.findOne({ ...baseFilter, cabin: cabinId }, null, {
-        session,
-      }),
-      this.bookingModel.findOne({ ...baseFilter, guest: guestId }, null, {
-        session,
-      }),
-    ]);
+    const cabinConflict = await this.bookingModel.findOne(
+      { ...baseFilter, cabin: cabinId },
+      null,
+      { session },
+    );
 
+    if (cabinConflict) {
+      throw new ConflictException('Cabin already booked');
+    }
+
+    const guestConflict = await this.bookingModel.findOne(
+      { ...baseFilter, guest: guestId },
+      null,
+      { session },
+    );
+
+    if (guestConflict) {
+      throw new ConflictException('Guest already booked');
+    }
     if (cabinConflict) {
       throw new ConflictException('Cabin already booked for selected dates');
     }
@@ -288,15 +299,30 @@ export class BookingService {
   ───────────────────────────────────────────────────── */
 
   /**
+   * Safe ObjectId validator
+   */
+  private ensureValidObjectId(id: string, field: string): Types.ObjectId {
+    if (!id || !Types.ObjectId.isValid(id)) {
+      throw new BadRequestException(`${field} is invalid`);
+    }
+
+    return new Types.ObjectId(id);
+  }
+
+  /**
    * Fetches a booking by ID and throws NotFoundException if missing.
    */
   private async findBookingOrFail(
     id: string,
     session?: ClientSession,
   ): Promise<Booking> {
-    const booking = await this.bookingModel
-      .findById(id)
-      .session(session ?? null);
+    const bookingId = this.ensureValidObjectId(id, 'Booking ID');
+
+    const query = this.bookingModel.findById(bookingId);
+
+    if (session) query.session(session);
+
+    const booking = await query.exec();
 
     if (!booking) {
       throw new NotFoundException('Booking not found');
@@ -312,7 +338,16 @@ export class BookingService {
     id: string,
     session?: ClientSession,
   ): Promise<Cabin> {
-    const cabin = await this.cabinModel.findById(id).session(session ?? null);
+    const cabinId = this.ensureValidObjectId(id, 'Cabin ID');
+
+    const query = this.cabinModel.findById(cabinId);
+
+    if (session) query.session(session);
+
+    const cabin = await query.exec();
+
+    console.log('Cabin Search ID:', id);
+    console.log('Cabin Found:', cabin?._id);
 
     if (!cabin) {
       throw new NotFoundException('Cabin not found');
@@ -328,7 +363,16 @@ export class BookingService {
     id: string,
     session?: ClientSession,
   ): Promise<User> {
-    const user = await this.userModel.findById(id).session(session ?? null);
+    const userId = this.ensureValidObjectId(id, 'User ID');
+
+    const query = this.userModel.findById(userId);
+
+    if (session) query.session(session);
+
+    const user = await query.exec();
+
+    console.log('User Search ID:', id);
+    console.log('User Found:', user?._id);
 
     if (!user) {
       throw new NotFoundException('User not found');
@@ -336,7 +380,6 @@ export class BookingService {
 
     return user;
   }
-
   /* ─────────────────────────────────────────────────────
      PRIVATE — TRANSACTION HELPER
   ───────────────────────────────────────────────────── */
@@ -352,13 +395,22 @@ export class BookingService {
     fn: (session: ClientSession) => Promise<T>,
   ): Promise<T> {
     const session = await this.bookingModel.db.startSession();
+
     try {
-      return await session.withTransaction(fn);
+      session.startTransaction();
+
+      const result = await fn(session);
+
+      await session.commitTransaction();
+
+      return result;
+    } catch (e) {
+      await session.abortTransaction();
+      throw e;
     } finally {
       await session.endSession();
     }
   }
-
   /* ─────────────────────────────────────────────────────
      AUTO EXPIRE
   ───────────────────────────────────────────────────── */
@@ -373,35 +425,40 @@ export class BookingService {
    * BUG FIX: the original query incorrectly filtered by `status: EXPIRED`.
    * It should filter by `status: PENDING` — only pending bookings can expire.
    */
-  async autoExpirePendingBookings(force = false): Promise<void> {
-    const now = new Date();
+  async autoExpirePendingBookings(options?: {
+    session?: ClientSession;
+    force?: boolean;
+  }): Promise<void> {
+    {
+      const now = new Date();
 
-    // Prevent running too often unless forced
-    if (
-      !force &&
-      this.lastExpirySweep &&
-      now.getTime() - this.lastExpirySweep.getTime() <
-        BookingService.EXPIRY_DEBOUNCE_MS
-    ) {
-      return;
-    }
+      if (
+        !options?.force &&
+        this.lastExpirySweep &&
+        now.getTime() - this.lastExpirySweep.getTime() <
+          BookingService.EXPIRY_DEBOUNCE_MS
+      ) {
+        return;
+      }
 
-    this.lastExpirySweep = now;
+      this.lastExpirySweep = now;
 
-    await this.bookingModel.updateMany(
-      {
-        status: BookingStatus.PENDING,
-        paymentDueAt: { $lt: now },
-        active: true,
-      },
-      {
-        $set: {
-          status: BookingStatus.EXPIRED,
-          active: false,
-          expiredAt: now,
+      await this.bookingModel.updateMany(
+        {
+          status: BookingStatus.PENDING,
+          paymentDueAt: { $lt: now },
+          active: true,
         },
-      },
-    );
+        {
+          $set: {
+            status: BookingStatus.EXPIRED,
+            active: false,
+            expiredAt: now,
+          },
+        },
+        options?.session ? { session: options.session } : {},
+      );
+    }
   }
 
   /* ─────────────────────────────────────────────────────
@@ -428,19 +485,20 @@ export class BookingService {
    */
   async create(input: CreateBookingInput, guestId: string): Promise<Booking> {
     return this.withTransaction(async (session) => {
-      await this.autoExpirePendingBookings();
-
       const { cabinId, startDate, endDate, numGuests, hasBreakfast } = input;
+
+      console.log('Incoming guestId:', guestId);
+      console.log('Incoming cabinId:', cabinId);
 
       const start = this.toUtcDateOnly(startDate);
       const end = this.toUtcDateOnly(endDate);
 
       this.validateDates(start, end);
 
-      const [cabin] = await Promise.all([
-        this.findCabinOrFail(cabinId, session),
-        this.findUserOrFail(guestId, session),
-      ]);
+      await this.autoExpirePendingBookings();
+
+      const cabin = await this.findCabinOrFail(cabinId, session);
+      const user = await this.findUserOrFail(guestId, session);
 
       if (numGuests > cabin.maxCapacity) {
         throw new BadRequestException(
@@ -457,6 +515,7 @@ export class BookingService {
       });
 
       const nights = this.getNights(start, end);
+
       const prices = this.calculatePrice(
         cabin,
         nights,
@@ -467,8 +526,8 @@ export class BookingService {
       const [booking] = await this.bookingModel.create(
         [
           {
-            guest: guestId,
-            cabin: cabinId,
+            guestId: user._id,
+            cabinId: cabin._id,
             startDate: start,
             endDate: end,
             numGuests,
@@ -477,16 +536,16 @@ export class BookingService {
             ...prices,
             status: BookingStatus.PENDING,
             active: true,
-            paymentDueAt: new Date(Date.now() + 15 * 60 * 1000), // 15-min hold
+            paymentDueAt: new Date(Date.now() + 15 * 60 * 1000),
           },
         ],
         { session },
       );
 
+      console.log(booking, 'booking');
       return booking;
     });
   }
-
   /* ─────────────────────────────────────────────────────
      READ — SINGLE
   ───────────────────────────────────────────────────── */
@@ -506,7 +565,7 @@ export class BookingService {
     if (!booking) {
       throw new NotFoundException('Booking not found');
     }
-
+    console.log(booking);
     if (!this.isPrivileged(user) && !this.isBookingOwner(booking, user._id)) {
       throw new ForbiddenException('Access denied');
     }
@@ -524,10 +583,20 @@ export class BookingService {
    *
    * @param user Authenticated user (guest)
    */
-  async findMyBookings(user: AuthUser): Promise<Booking[]> {
-    return this.bookingModel.find({ guest: user._id }).sort({ createdAt: -1 });
-  }
+  async findMyBookings(user: AuthUser): Promise<BookingListResponse> {
+    const guestId =
+      typeof user._id === 'string' ? new Types.ObjectId(user._id) : user._id;
 
+    const bookings = await this.bookingModel
+      .find({ guestId })
+      .sort({ createdAt: -1 });
+
+    return {
+      status: 200,
+      message: 'success',
+      data: bookings,
+    };
+  }
   /* ─────────────────────────────────────────────────────
      READ — ALL (ADMIN / MANAGER)
   ───────────────────────────────────────────────────── */
@@ -545,7 +614,7 @@ export class BookingService {
    *
    * @param query Pagination + filter input
    */
-  async findAll(query: BookingQueryInput) {
+  async findAll(query: BookingQueryInput): Promise<PaginatedResult<Booking>> {
     await this.autoExpirePendingBookings();
 
     return buildQuery(this.bookingModel, query, {
@@ -601,7 +670,7 @@ export class BookingService {
       this.assertOwnerOrPrivileged(booking, user);
       this.assertMutable(booking);
 
-      const cabinId = dto.cabinId ?? booking.cabin.toString();
+      const cabinId = dto.cabinId ?? booking.cabinId.toString();
       const start = this.toUtcDateOnly(dto.startDate ?? booking.startDate);
       const end = this.toUtcDateOnly(dto.endDate ?? booking.endDate);
       const numGuests = dto.numGuests ?? booking.numGuests;
@@ -619,7 +688,7 @@ export class BookingService {
 
       await this.assertNoConflicts({
         cabinId,
-        guestId: booking.guest.toString(),
+        guestId: booking.guestId.toString(),
         start,
         end,
         excludeId: id,
@@ -634,7 +703,7 @@ export class BookingService {
         hasBreakfast,
       );
 
-      booking.cabin = new Types.ObjectId(cabinId);
+      booking.cabinId = new Types.ObjectId(cabinId);
       booking.startDate = start;
       booking.endDate = end;
       booking.numGuests = numGuests;

@@ -1,12 +1,21 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { User } from './user.schema';
+import { User, UserRole } from './user.schema';
 import { UpdateUserInput } from './dto/update-user.input';
 import * as bcrypt from 'bcrypt';
 import { UserQueryInput } from './dto/create-user.input';
 import { buildQuery } from 'src/common/utils/query-builder';
+import { AuthUser } from 'src/booking/booking.service';
+import { Types } from 'mongoose';
 
+function isObjectId(value: string): boolean {
+  return Types.ObjectId.isValid(value);
+}
 /**
  * UserService
  *
@@ -59,22 +68,49 @@ export class UserService {
   }
 
   /**
-   * Find a single user by MongoDB ObjectId.
+   * Retrieves a user by MongoDB ObjectId or Email .
    *
-   * @param id - User ID
-   * @throws NotFoundException if user does not exist
-   * @returns User document
+   * Assumes the provided id is a valid ObjectId. Invalid IDs should be
+   * validated before calling this method.
+   *
+   * @private MANAGER
+   * @param input - MongoDB ObjectId || Email
+   * @throws NotFoundException if user is not found
+   * @returns The User document
    */
-  async findOne(id: string): Promise<User> {
-    const user = await this.userModel.findById(id);
+  async findOneByAdmin(input: string, user?: AuthUser): Promise<User> {
+    if (!input) {
+      throw new BadRequestException('User not found');
+    }
 
-    if (!user) {
+    let query: any;
+
+    const isId = isObjectId(input);
+    console.log(isId);
+    const isEmail = !isId;
+    console.log(isEmail);
+    // MANAGER can access by ID directly
+    if (user?.role === UserRole.MANAGER && isId) {
+      query = { _id: new Types.ObjectId(input) };
+      console.log(query, 'query');
+    }
+
+    // email lookup
+    else if (user?.role === UserRole.MANAGER && isEmail) {
+      query = { email: input };
+      console.log(isEmail, 'email');
+    } else {
+      throw new BadRequestException('Invalid input');
+    }
+    console.log(query, 'final query');
+    const userFound = await this.userModel.findOne(query);
+
+    if (!userFound) {
       throw new NotFoundException('User not found');
     }
 
-    return user;
+    return userFound;
   }
-
   /**
    * Find user by ID with sensitive fields included.
    *
@@ -94,6 +130,10 @@ export class UserService {
     }
 
     return user;
+  }
+
+  async findMe(id: string) {
+    return this.userModel.findById(id);
   }
 
   /**

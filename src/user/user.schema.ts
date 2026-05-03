@@ -15,8 +15,9 @@ registerEnumType(UserRole, { name: 'UserRole' });
 @Schema({ timestamps: true })
 export class User extends Document {
   @Field(() => ID)
-  id: string;
-
+  get id(): string {
+    return this._id.toString();
+  }
   @Field()
   @Prop({ type: String, required: true })
   fullName: string;

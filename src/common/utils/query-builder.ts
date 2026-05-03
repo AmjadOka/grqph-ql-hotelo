@@ -1,13 +1,15 @@
-/* eslint-disable @typescript-eslint/no-unsafe-return */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
-/* eslint-disable @typescript-eslint/no-unsafe-member-access */
-/* eslint-disable @typescript-eslint/no-unsafe-call */
-type QueryOptions<T extends object = Record<string, unknown>> = {
+import { Model, Types } from 'mongoose';
+
+/* ─────────────────────────────
+   TYPES
+───────────────────────────── */
+
+type QueryOptions<TFilter extends object = Record<string, unknown>> = {
   searchFields?: string[];
   defaultSort?: string;
   select?: string;
   skipFields?: string[];
-  customFilter?: (query: BaseQuery & T) => Record<string, unknown>;
+  customFilter?: (query: BaseQuery & TFilter) => Record<string, unknown>;
 };
 
 export interface BaseQuery {
@@ -18,11 +20,28 @@ export interface BaseQuery {
   sortOrder?: 'asc' | 'desc';
 }
 
-export async function buildQuery<TFilter extends object>(
-  model: any,
+export type PaginatedResult<T> = {
+  data: (T & { id: string })[];
+  meta: {
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  };
+};
+
+/* ─────────────────────────────
+   MAIN FUNCTION
+───────────────────────────── */
+
+export async function buildQuery<
+  TDocument extends { _id: Types.ObjectId | string },
+  TFilter extends object = Record<string, unknown>,
+>(
+  model: Model<TDocument>,
   query: BaseQuery & TFilter,
   options: QueryOptions<TFilter> = {},
-) {
+): Promise<PaginatedResult<TDocument>> {
   const {
     page = 1,
     limit = 10,
@@ -33,9 +52,10 @@ export async function buildQuery<TFilter extends object>(
 
   const skip = (page - 1) * limit;
 
-  // ─────────────────────────────
-  // Fields ignored from raw equality filters
-  // ─────────────────────────────
+  /* ─────────────────────────────
+     EXCLUDED FIELDS
+  ───────────────────────────── */
+
   const excludedFields = new Set([
     'page',
     'limit',
@@ -47,9 +67,10 @@ export async function buildQuery<TFilter extends object>(
 
   let mongoFilter: Record<string, unknown> = {};
 
-  // ─────────────────────────────
-  // 1. Base equality filters
-  // ─────────────────────────────
+  /* ─────────────────────────────
+     BASE FILTERS
+  ───────────────────────────── */
+
   for (const [key, value] of Object.entries(query)) {
     if (excludedFields.has(key)) continue;
     if (value === undefined || value === null || value === '') continue;
@@ -57,9 +78,10 @@ export async function buildQuery<TFilter extends object>(
     mongoFilter[key] = value;
   }
 
-  // ─────────────────────────────
-  // 2. Custom filters
-  // ─────────────────────────────
+  /* ─────────────────────────────
+     CUSTOM FILTER
+  ───────────────────────────── */
+
   if (options.customFilter) {
     mongoFilter = {
       ...mongoFilter,
@@ -67,9 +89,10 @@ export async function buildQuery<TFilter extends object>(
     };
   }
 
-  // ─────────────────────────────
-  // 3. Search
-  // ─────────────────────────────
+  /* ─────────────────────────────
+     SEARCH
+  ───────────────────────────── */
+
   if (search && options.searchFields?.length) {
     mongoFilter.$or = options.searchFields.map((field) => ({
       [field]: {
@@ -79,17 +102,18 @@ export async function buildQuery<TFilter extends object>(
     }));
   }
 
-  // ─────────────────────────────
-  // 4. Sort
-  // ─────────────────────────────
+  /* ─────────────────────────────
+     SORT
+  ───────────────────────────── */
+
   const sort: Record<string, 1 | -1> = {
     [sortBy]: sortOrder === 'asc' ? 1 : -1,
   };
-  console.log(query);
-  console.log(mongoFilter, sort, skip, limit);
-  // ─────────────────────────────
-  // 5. Execute
-  // ─────────────────────────────
+
+  /* ─────────────────────────────
+     QUERY EXECUTION
+  ───────────────────────────── */
+
   const [data, total] = await Promise.all([
     model
       .find(mongoFilter)
@@ -97,16 +121,18 @@ export async function buildQuery<TFilter extends object>(
       .sort(sort)
       .skip(skip)
       .limit(limit)
-      .lean(),
+      .lean<TDocument[]>()
+      .exec(),
 
     model.countDocuments(mongoFilter),
   ]);
 
-  // ─────────────────────────────
-  // 6. Response
-  // ─────────────────────────────
+  /* ─────────────────────────────
+     RESPONSE
+  ───────────────────────────── */
+
   return {
-    data: data.map((item: any) => ({
+    data: data.map((item) => ({
       ...item,
       id: item._id.toString(),
     })),

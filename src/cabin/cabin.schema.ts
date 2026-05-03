@@ -1,13 +1,14 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { ObjectType, Field, ID, Int, Float } from '@nestjs/graphql';
-import { Document, Schema as MongooseSchema, Types } from 'mongoose';
+import { ObjectType, Field, Int, Float, ID } from '@nestjs/graphql';
+import { Document, Schema as MongooseSchema } from 'mongoose';
 
 @ObjectType()
 @Schema({ timestamps: true })
 export class Cabin extends Document {
   @Field(() => ID)
-  declare _id: Types.ObjectId;
-
+  get id(): string {
+    return this._id.toString();
+  }
   @Field()
   @Prop({ type: String, required: true, unique: true, trim: true })
   name: string;

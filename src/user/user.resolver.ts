@@ -8,6 +8,7 @@ import { GqlAuthGuard } from 'src/common/guards/gql-auth.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
 import { UsersResponse } from './dto/response-user.dto';
 import { UserQueryInput } from './dto/create-user.input';
+import type { AuthUser } from 'src/booking/booking.service';
 
 /**
  * UserResolver
@@ -62,9 +63,15 @@ export class UserResolver {
    */
   @Roles(UserRole.MANAGER)
   @UseGuards(GqlAuthGuard)
-  @Query(() => User, { name: 'user' })
-  async getUser(@Args('id', { type: () => ID }) id: string) {
-    return this.userService.findOne(id);
+  @Query(() => User, {
+    description: 'Fetch a single user by their unique email or MongoId',
+  })
+  async getUser(
+    @Args('input', { type: () => ID, description: 'enter email or MongoId' })
+    input: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.userService.findOneByAdmin(input, user);
   }
 
   /**
@@ -84,8 +91,8 @@ export class UserResolver {
   @UseGuards(GqlAuthGuard)
   @Query(() => User)
   @UseGuards(GqlAuthGuard)
-  async me(@CurrentUser() user: { _id: string; role: UserRole }) {
-    return this.userService.findOne(user._id);
+  findMe(@CurrentUser() user: { _id: string; role: UserRole }) {
+    return this.userService.findMe(user._id);
   }
 
   /**

@@ -65,27 +65,35 @@ registerEnumType(PaymentStatus, {
 @ObjectType()
 @Schema({ timestamps: true })
 export class Booking extends Document {
-  /* ─── Identification ─────────────────────────────── */
-
+  @Field(() => ID)
+  get id(): string {
+    return this._id.toString();
+  }
   /* ─── Relations ──────────────────────────────────── */
 
   /** The cabin being reserved.  Resolved via CabinLoader in the resolver. */
-  @Field(() => Cabin)
+  @Field(() => ID)
   @Prop({
     type: MongooseSchema.Types.ObjectId,
     ref: Cabin.name,
     required: true,
   })
-  cabin: Types.ObjectId;
+  cabinId: Types.ObjectId;
+
+  @Field(() => Cabin, { nullable: true })
+  cabin?: Cabin;
 
   /** The guest who made the booking.  Resolved via UserLoader in the resolver. */
-  @Field(() => User)
+  @Field(() => ID)
   @Prop({
     type: MongooseSchema.Types.ObjectId,
     ref: User.name,
     required: true,
   })
-  guest: Types.ObjectId;
+  guestId: Types.ObjectId;
+
+  @Field(() => User, { nullable: true })
+  guest?: User;
 
   /* ─── Dates ──────────────────────────────────────── */
 

@@ -1,8 +1,8 @@
-/* ===========================
+/* =====================================================
    booking-response.dto.ts
-=========================== */
+===================================================== */
 
-import { Field, Int, ObjectType } from '@nestjs/graphql';
+import { Field, ID, Int, ObjectType } from '@nestjs/graphql';
 import { Booking } from '../booking.schema';
 
 @ObjectType()
@@ -13,8 +13,8 @@ export class BookingResponse {
   @Field()
   message: string;
 
-  @Field(() => Booking, { nullable: true })
-  data?: Booking;
+  @Field(() => Booking)
+  data: Booking;
 }
 
 @ObjectType()
@@ -43,8 +43,8 @@ export class BookingListResponse {
   @Field(() => [Booking])
   data: Booking[];
 
-  @Field(() => BookingMeta)
-  meta: BookingMeta;
+  @Field(() => BookingMeta, { nullable: true })
+  meta?: BookingMeta;
 }
 
 @ObjectType()
@@ -54,4 +54,7 @@ export class DeleteResponse {
 
   @Field()
   message: string;
+
+  @Field(() => ID, { nullable: true })
+  id?: string;
 }

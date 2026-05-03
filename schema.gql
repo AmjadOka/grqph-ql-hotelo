@@ -3,7 +3,7 @@
 # ------------------------------------------------------
 
 type Cabin {
-  _id: ID!
+  id: ID!
   name: String!
   maxCapacity: Int!
   regularPrice: Float!
@@ -70,8 +70,11 @@ type MessageResponse {
 }
 
 type Booking {
-  cabin: Cabin!
-  guest: User!
+  id: ID!
+  cabinId: ID!
+  cabin: Cabin
+  guestId: ID!
+  guest: User
   startDate: DateTime!
   endDate: DateTime!
   numNights: Int!
@@ -127,7 +130,7 @@ enum PaymentStatus {
 type BookingResponse {
   status: Int!
   message: String!
-  data: Booking
+  data: Booking!
 }
 
 type BookingMeta {
@@ -141,12 +144,13 @@ type BookingListResponse {
   status: Int!
   message: String!
   data: [Booking!]!
-  meta: BookingMeta!
+  meta: BookingMeta
 }
 
 type DeleteResponse {
   status: Int!
   message: String!
+  id: ID
 }
 
 type Settings {
@@ -164,8 +168,8 @@ type UploadResponse {
 }
 
 type Review {
-  user: ID!
-  cabin: ID!
+  userId: ID!
+  cabinId: ID!
   rating: Int!
   comment: String
   isEdited: Boolean!
@@ -209,16 +213,15 @@ type Query {
   """Retrieve a single cabin by ID"""
   cabin(id: ID!): Cabin!
   findAllUsers(query: UserQueryInput): UsersResponse!
-  user(id: ID!): User!
-  me: User!
 
-  """Retrieve the authenticated guest's booking history"""
+  """Fetch a single user by their unique email or MongoId"""
+  getUser(
+    """enter email or MongoId"""
+    input: ID!
+  ): User!
+  findMe: User!
   myBookings: BookingListResponse!
-
-  """Retrieve a single booking by ID"""
   booking(id: ID!): BookingResponse!
-
-  """Retrieve all bookings with optional filtering (admin/manager)"""
   allBookings(query: BookingQueryInput): BookingListResponse!
   settings: Settings!
 
@@ -294,26 +297,12 @@ type Mutation {
   resetPassword(input: ResetPasswordInput!): MessageResponse!
   verifyCode(input: VerifyCodeInput!): MessageResponse!
   changePassword(input: ChangePasswordInput!): MessageResponse!
-
-  """Create a new booking (guest only)"""
   createBooking(input: CreateBookingInput!): BookingResponse!
-
-  """Update an existing booking (owner or manager)"""
   updateBooking(id: ID!, input: UpdateBookingInput!): BookingResponse!
-
-  """Cancel a booking (owner or manager/admin)"""
   cancelBooking(id: ID!, reason: String): DeleteResponse!
-
-  """Confirm payment and activate a pending booking (staff only)"""
   confirmBooking(id: ID!): BookingResponse!
-
-  """Check in a confirmed booking (staff only)"""
   checkIn(id: ID!): BookingResponse!
-
-  """Check out an active stay (staff only)"""
   checkOut(id: ID!): BookingResponse!
-
-  """Mark a booking as no-show (staff only)"""
   markNoShow(id: ID!): BookingResponse!
   updateSettings(input: UpdateSettingsInput!): Settings!
   uploadCabinImage(file: Upload!): UploadResponse!
