@@ -10,7 +10,7 @@ import { UpdateUserInput } from './dto/update-user.input';
 import * as bcrypt from 'bcrypt';
 import { UserQueryInput } from './dto/create-user.input';
 import { buildQuery } from 'src/common/utils/query-builder';
-import { AuthUser } from 'src/booking/booking.service';
+import type { AuthUser } from 'src/common/types/AuthUser';
 import { Types } from 'mongoose';
 
 function isObjectId(value: string): boolean {

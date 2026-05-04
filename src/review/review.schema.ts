@@ -41,13 +41,11 @@ export class Review extends Document {
 
   @Field({ nullable: true })
   @Prop()
-  editedAt?: Date;
+  updatedAt?: Date;
 }
 
 export const ReviewSchema = SchemaFactory.createForClass(Review);
 
-// Compound unique: one review per user per cabin
-ReviewSchema.index({ user: 1, cabin: 1 }, { unique: true });
-ReviewSchema.index({ cabin: 1, createdAt: -1 });
-ReviewSchema.index({ user: 1, createdAt: -1 });
-ReviewSchema.index({ cabin: 1, rating: 1 });
+// FIX: use correct field names (userId / cabinId) matching the @Prop definitions
+ReviewSchema.index({ userId: 1, cabinId: 1 }, { unique: true });
+ReviewSchema.index({ userId: 1, createdAt: -1 });

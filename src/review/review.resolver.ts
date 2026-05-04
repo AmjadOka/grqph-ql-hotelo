@@ -1,5 +1,4 @@
 import { Resolver, Query, Mutation, Args, ID } from '@nestjs/graphql';
-import { UseGuards } from '@nestjs/common';
 
 import { ReviewService } from './review.service';
 import { GqlAuthGuard } from 'src/common/guards/gql-auth.guard';
@@ -16,11 +15,8 @@ import {
 } from './dto/review-response.dto';
 import { Roles } from 'src/common/decorators/roles.decorator';
 import { UserRole } from 'src/user/user.schema';
-
-export interface AuthUser {
-  _id: string;
-  role: UserRole;
-}
+import { UseGuards } from '@nestjs/common';
+import type { AuthUser } from 'src/common/types/AuthUser';
 
 /**
  * ReviewResolver
@@ -56,9 +52,9 @@ export class ReviewResolver {
     @Args('input') input: CreateReviewInput,
     @CurrentUser() user: AuthUser,
   ) {
-    console.log(6545);
-    console.log(input);
-    console.log(user);
+    console.log('INPUT:', JSON.stringify(input));
+    console.log('USER:', JSON.stringify(user));
+
     const review = await this.reviewService.create(user._id, input);
     return {
       status: 201,

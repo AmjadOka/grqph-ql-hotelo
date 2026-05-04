@@ -39,18 +39,15 @@ export class ReviewStatsListener {
     const { cabinId } = payload;
 
     try {
-      /* ── 1. Aggregate new stats ── */
+      // FIX: $match now uses correct field name 'cabinId' with a proper
+      // ObjectId conversion — no more fragile type-sniffing logic
       const [stats] = await this.reviewModel.aggregate<{
         avgRating: number;
         count: number;
       }>([
         {
           $match: {
-            cabin: {
-              $eq: (this.reviewModel as any).schema.obj.cabin?.type
-                ? cabinId
-                : Types.ObjectId.createFromHexString(cabinId),
-            },
+            cabinId: new Types.ObjectId(cabinId),
           },
         },
         {

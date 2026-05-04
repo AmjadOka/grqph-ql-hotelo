@@ -11,10 +11,10 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { JwtModule } from '@nestjs/jwt';
 import { CacheModule } from '@nestjs/cache-manager';
 import { UploadModule } from './upload/upload.module';
-import { ReviewModule } from './review/review.module';
 import * as redisStore from 'cache-manager-redis-store';
 import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ReviewModule } from './review/review.module';
 
 @Module({
   imports: [

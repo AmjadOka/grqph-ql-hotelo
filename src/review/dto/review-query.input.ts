@@ -1,25 +1,45 @@
-import { InputType, Field, ID, Int } from '@nestjs/graphql';
+import { InputType, Field, Int, ID } from '@nestjs/graphql';
+import { IsOptional, IsInt, Min, IsString, IsMongoId } from 'class-validator';
+import { Type } from 'class-transformer';
 
 @InputType()
 export class ReviewQueryInput {
-  @Field({ nullable: true })
-  search?: string;
-
   @Field(() => ID, { nullable: true })
+  @IsMongoId()
+  @IsString()
+  @IsOptional()
   cabinId?: string;
 
   @Field(() => ID, { nullable: true })
+  @IsMongoId()
+  @IsString()
+  @IsOptional()
   userId?: string;
 
-  @Field(() => Int, { nullable: true })
-  page?: number;
+  @Field({ nullable: true })
+  @IsOptional()
+  @IsString()
+  search?: string;
 
   @Field(() => Int, { nullable: true })
-  limit?: number;
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
+
+  @Field(() => Int, { nullable: true })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  limit?: number = 10;
 
   @Field({ nullable: true })
-  sortBy?: string;
+  @IsOptional()
+  sortBy?: string = 'createdAt';
 
   @Field({ nullable: true })
-  sortOrder?: 'asc' | 'desc';
+  @IsOptional()
+  sortOrder?: 'asc' | 'desc' = 'desc';
 }

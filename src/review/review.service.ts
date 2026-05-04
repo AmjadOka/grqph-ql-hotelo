@@ -16,17 +16,16 @@ import { Review } from './review.schema';
 import { Cabin } from '../cabin/cabin.schema';
 import { buildQuery, BaseQuery } from 'src/common/utils/query-builder';
 import { UserRole } from 'src/user/user.schema';
-import { AuthUser } from './review.resolver';
 import { UpdateReviewInput } from './dto/update-review.input';
 import { CreateReviewInput } from './dto/create-review.input';
 import { ReviewEvents } from './review.event';
 import { reviewListIndexKey } from './review-stats.listener';
 import { ReviewQueryInput } from './dto/review-query.input';
+import type { AuthUser } from 'src/common/types/AuthUser';
 
 /** Cache TTL for review lists (seconds) */
 const REVIEW_CACHE_TTL = 60;
 
-// review-response.dto.ts — export the inner type too
 export interface ReviewPaginatedResult {
   data: Review[];
   meta: {
@@ -36,6 +35,7 @@ export interface ReviewPaginatedResult {
     totalPages: number;
   };
 }
+
 @Injectable()
 export class ReviewService {
   private readonly logger = new Logger(ReviewService.name);
@@ -84,7 +84,7 @@ export class ReviewService {
    * Creates a new review for a cabin.
    *
    * Rules:
-   * - Rating 1–5 only
+   * - Rating 1–5 only (integer)
    * - Cabin must exist
    * - One review per user per cabin (unique index enforced at DB level too)
    *
@@ -95,16 +95,11 @@ export class ReviewService {
     const { cabinId, rating, comment } = input;
 
     this.assertRatingValid(rating);
-    console.log('STEP 1');
 
     const cabinExist = await this.cabinModel.findById(cabinId);
     if (!cabinExist) throw new NotFoundException('Cabin not found');
-    console.log('STEP 2');
 
-    const exists = await this.reviewModel.findOne({
-      userId,
-      cabinId,
-    });
+    const exists = await this.reviewModel.findOne({ userId, cabinId });
     if (exists) {
       throw new BadRequestException('You already reviewed this cabin');
     }
@@ -129,10 +124,10 @@ export class ReviewService {
    *
    * Rules:
    * - At least one field must be provided
-   * - Rating must be 1–5 if provided
+   * - Rating must be 1–5 integer if provided
    * - Only the review's author may update it
    *
-   * Sets `isEdited = true` and records `editedAt`.
+   * Sets `isEdited = true` and records `updatedAt/'[]`.
    * Emits `review.changed` afterward.
    */
   async update(userId: string, input: UpdateReviewInput): Promise<Review> {
@@ -155,7 +150,7 @@ export class ReviewService {
     if (comment !== undefined) review.comment = comment;
 
     review.isEdited = true;
-    review.editedAt = new Date();
+    review.updatedAt = new Date();
 
     const saved = await review.save();
 
@@ -208,10 +203,11 @@ export class ReviewService {
       defaultSort: 'createdAt',
       searchFields: ['comment'],
       skipFields: ['cabinId', 'userId'],
+      // FIX: use correct field names (cabinId / userId) not (cabin / user)
       customFilter: (q) => {
         const filter: Record<string, any> = {};
-        if (q.cabinId) filter.cabin = q.cabinId;
-        if (q.userId) filter.user = q.userId;
+        if (q.cabinId) filter.cabinId = q.cabinId;
+        if (q.userId) filter.userId = q.userId;
         return filter;
       },
     });
@@ -224,8 +220,6 @@ export class ReviewService {
   /**
    * Returns a paginated list of all reviews made by a specific user.
    * Cached per user+query combination (TTL 60s).
-   * Invalidated when any of their reviews change (listener handles cabin-level;
-   * user-level entries are short-lived via TTL — acceptable trade-off).
    */
   async findByUser(userId: string, query: ReviewQueryInput) {
     const cacheKey = this.userReviewCacheKey(userId, query);
@@ -235,12 +229,14 @@ export class ReviewService {
     const data = await buildQuery(this.reviewModel, query, {
       defaultSort: 'createdAt',
       skipFields: ['userId'],
-      customFilter: () => ({ user: userId }),
+      // FIX: use correct field name (userId) not (user)
+      customFilter: () => ({ userId }),
     });
 
     await this.cache.set(cacheKey, data, REVIEW_CACHE_TTL);
     return data;
   }
+
   /* =====================================================
      REVIEWS BY CABIN
   ===================================================== */
@@ -255,6 +251,7 @@ export class ReviewService {
    * - Invalidation → triggered by `review.changed` event via ReviewStatsListener
    */
   async findByCabin(cabinId: string, query: ReviewQueryInput) {
+    query.cabinId = '';
     const cacheKey = this.reviewCacheKey(cabinId, query);
     const cached = await this.cache.get<ReviewPaginatedResult>(cacheKey);
     if (cached) return cached;
@@ -263,7 +260,8 @@ export class ReviewService {
       defaultSort: 'createdAt',
       searchFields: ['comment'],
       skipFields: ['cabinId'],
-      customFilter: () => ({ cabin: cabinId }),
+      // FIX: use correct field name (cabinId) not (cabin)
+      customFilter: () => ({ cabinId }),
     });
 
     await this.cache.set(cacheKey, data, REVIEW_CACHE_TTL);
@@ -275,9 +273,10 @@ export class ReviewService {
      PRIVATE — VALIDATION
   ===================================================== */
 
+  // FIX: use Number.isInteger instead of Number.isFinite to properly
+  // reject floats like 3.5 and non-numeric values
   private assertRatingValid(rating: number): void {
-    console.log('Rating:', rating);
-    if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
       throw new BadRequestException(
         'Rating must be an integer between 1 and 5',
       );

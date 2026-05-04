@@ -7,6 +7,7 @@ import { Booking, BookingSchema } from './booking.schema';
 import { Cabin, CabinSchema } from 'src/cabin/cabin.schema';
 import { UserLoader } from './loaders/user.loader';
 import { CabinLoader } from './loaders/cabin.loader';
+import { BookingScheduler } from './booking.scheduler';
 
 @Module({
   imports: [
@@ -16,6 +17,12 @@ import { CabinLoader } from './loaders/cabin.loader';
       { name: Cabin.name, schema: CabinSchema },
     ]),
   ],
-  providers: [BookingResolver, BookingService, UserLoader, CabinLoader],
+  providers: [
+    BookingResolver,
+    BookingService,
+    UserLoader,
+    CabinLoader,
+    BookingScheduler,
+  ],
 })
 export class BookingModule {}

@@ -20,15 +20,11 @@ import {
 import { UpdateBookingInput } from './dto/update-booking.input';
 import { buildQuery, PaginatedResult } from '../common/utils/query-builder';
 import { BookingListResponse } from './dto/booking-response.dto';
+import type { AuthUser } from 'src/common/types/AuthUser';
 
 /* =====================================================
    TYPES
 ===================================================== */
-
-export type AuthUser = {
-  _id: string;
-  role: UserRole;
-};
 
 /** Statuses that occupy a cabin / guest slot (i.e. block new bookings) */
 const ACTIVE_BLOCKING_STATUSES = [
@@ -259,33 +255,21 @@ export class BookingService {
     start: Date;
     end: Date;
     excludeId?: string;
-    session?: ClientSession;
+    session: ClientSession;
   }): Promise<void> {
     const { cabinId, guestId, start, end, excludeId, session } = params;
     const baseFilter = this.buildConflictFilter(start, end, excludeId);
 
-    const cabinConflict = await this.bookingModel.findOne(
-      { ...baseFilter, cabin: cabinId },
-      null,
-      { session },
-    );
-
-    if (cabinConflict) {
-      throw new ConflictException('Cabin already booked');
-    }
-
-    const guestConflict = await this.bookingModel.findOne(
-      { ...baseFilter, guest: guestId },
-      null,
-      { session },
-    );
-
-    if (guestConflict) {
-      throw new ConflictException('Guest already booked');
-    }
+    const cabinConflict = await this.bookingModel
+      .findOne({ ...baseFilter, cabinId })
+      .session(session);
     if (cabinConflict) {
       throw new ConflictException('Cabin already booked for selected dates');
     }
+
+    const guestConflict = await this.bookingModel
+      .findOne({ ...baseFilter, guestId })
+      .session(session);
 
     if (guestConflict) {
       throw new ConflictException(
@@ -346,9 +330,6 @@ export class BookingService {
 
     const cabin = await query.exec();
 
-    console.log('Cabin Search ID:', id);
-    console.log('Cabin Found:', cabin?._id);
-
     if (!cabin) {
       throw new NotFoundException('Cabin not found');
     }
@@ -370,9 +351,6 @@ export class BookingService {
     if (session) query.session(session);
 
     const user = await query.exec();
-
-    console.log('User Search ID:', id);
-    console.log('User Found:', user?._id);
 
     if (!user) {
       throw new NotFoundException('User not found');
@@ -487,15 +465,12 @@ export class BookingService {
     return this.withTransaction(async (session) => {
       const { cabinId, startDate, endDate, numGuests, hasBreakfast } = input;
 
-      console.log('Incoming guestId:', guestId);
-      console.log('Incoming cabinId:', cabinId);
-
       const start = this.toUtcDateOnly(startDate);
       const end = this.toUtcDateOnly(endDate);
 
       this.validateDates(start, end);
 
-      await this.autoExpirePendingBookings();
+      //await this.autoExpirePendingBookings({ session });
 
       const cabin = await this.findCabinOrFail(cabinId, session);
       const user = await this.findUserOrFail(guestId, session);
@@ -542,7 +517,6 @@ export class BookingService {
         { session },
       );
 
-      console.log(booking, 'booking');
       return booking;
     });
   }
@@ -615,7 +589,7 @@ export class BookingService {
    * @param query Pagination + filter input
    */
   async findAll(query: BookingQueryInput): Promise<PaginatedResult<Booking>> {
-    await this.autoExpirePendingBookings();
+    //  await this.autoExpirePendingBookings();
 
     return buildQuery(this.bookingModel, query, {
       defaultSort: 'createdAt',
@@ -625,8 +599,8 @@ export class BookingService {
       customFilter: (q) => {
         const filter: Record<string, any> = {};
 
-        if (q.guestId) filter.guest = q.guestId;
-        if (q.cabinId) filter.cabin = q.cabinId;
+        if (q.guestId) filter.guestId = q.guestId;
+        if (q.cabinId) filter.cabinId = q.cabinId;
 
         if (q.startDate && q.endDate) {
           filter.startDate = { $lt: q.endDate };
@@ -686,6 +660,7 @@ export class BookingService {
         );
       }
 
+      console.log(id, 'id');
       await this.assertNoConflicts({
         cabinId,
         guestId: booking.guestId.toString(),

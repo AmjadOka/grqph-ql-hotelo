@@ -65,9 +65,9 @@ export class GqlAuthGuard implements CanActivate {
     }
 
     // Super admin override
-    // if (payload.role === UserRole.MANAGER) {
-    // return true;
-    // }
+    if (payload.role === UserRole.MANAGER) {
+      return true;
+    }
 
     if (!requiredRoles.includes(payload.role)) {
       throw new ForbiddenException('You do not have permission');

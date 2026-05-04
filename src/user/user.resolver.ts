@@ -8,7 +8,7 @@ import { GqlAuthGuard } from 'src/common/guards/gql-auth.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
 import { UsersResponse } from './dto/response-user.dto';
 import { UserQueryInput } from './dto/create-user.input';
-import type { AuthUser } from 'src/booking/booking.service';
+import type { AuthUser } from 'src/common/types/AuthUser';
 
 /**
  * UserResolver

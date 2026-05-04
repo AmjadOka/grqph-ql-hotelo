@@ -173,7 +173,7 @@ type Review {
   rating: Int!
   comment: String
   isEdited: Boolean!
-  editedAt: DateTime
+  updatedAt: DateTime
 }
 
 type ReviewMeta {
@@ -270,13 +270,13 @@ input BookingQueryInput {
 }
 
 input ReviewQueryInput {
-  search: String
   cabinId: ID
   userId: ID
-  page: Int
-  limit: Int
-  sortBy: String
-  sortOrder: String
+  search: String
+  page: Int = 1
+  limit: Int = 10
+  sortBy: String = "createdAt"
+  sortOrder: String = "desc"
 }
 
 type Mutation {
@@ -401,13 +401,13 @@ input UpdateSettingsInput {
 scalar Upload
 
 input CreateReviewInput {
-  cabinId: ID!
+  cabinId: String!
   rating: Int!
   comment: String
 }
 
 input UpdateReviewInput {
   reviewId: ID!
-  rating: Int
+  rating: Int!
   comment: String
 }

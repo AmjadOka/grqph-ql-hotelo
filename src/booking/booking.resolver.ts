@@ -10,7 +10,6 @@ import {
 import { UseGuards } from '@nestjs/common';
 
 import { BookingService } from './booking.service';
-import type { AuthUser } from 'src/review/review.resolver';
 import { Booking } from './booking.schema';
 import {
   BookingQueryInput,
@@ -29,6 +28,7 @@ import {
 import { UserLoader } from './loaders/user.loader';
 import { CabinLoader } from './loaders/cabin.loader';
 import { Cabin } from 'src/cabin/cabin.schema';
+import type { AuthUser } from 'src/common/types/AuthUser';
 
 /* =====================================================
    RESOLVER
