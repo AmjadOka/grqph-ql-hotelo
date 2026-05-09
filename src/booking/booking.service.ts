@@ -21,6 +21,8 @@ import { UpdateBookingInput } from './dto/update-booking.input';
 import { buildQuery, PaginatedResult } from '../common/utils/query-builder';
 import { BookingListResponse } from './dto/booking-response.dto';
 import type { AuthUser } from 'src/common/types/AuthUser';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { BookingExpiredEvent } from 'src/common/events/booking-expired.event';
 
 /* =====================================================
    TYPES
@@ -62,6 +64,7 @@ export class BookingService {
 
     @InjectModel(User.name)
     private readonly userModel: Model<User>,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   /* ─────────────────────────────────────────────────────
@@ -407,34 +410,61 @@ export class BookingService {
     session?: ClientSession;
     force?: boolean;
   }): Promise<void> {
-    {
-      const now = new Date();
+    const now = new Date();
 
-      if (
-        !options?.force &&
-        this.lastExpirySweep &&
-        now.getTime() - this.lastExpirySweep.getTime() <
-          BookingService.EXPIRY_DEBOUNCE_MS
-      ) {
-        return;
-      }
+    // skip if already recently run
+    if (
+      !options?.force &&
+      this.lastExpirySweep &&
+      now.getTime() - this.lastExpirySweep.getTime() <
+        BookingService.EXPIRY_DEBOUNCE_MS
+    ) {
+      return;
+    }
 
-      this.lastExpirySweep = now;
+    this.lastExpirySweep = now;
 
-      await this.bookingModel.updateMany(
+    const session = options?.session;
+
+    // 1. find bookings to expire
+    const expiredBookings = await this.bookingModel
+      .find(
         {
           status: BookingStatus.PENDING,
           paymentDueAt: { $lt: now },
           active: true,
         },
-        {
-          $set: {
-            status: BookingStatus.EXPIRED,
-            active: false,
-            expiredAt: now,
-          },
+        null,
+        { session },
+      )
+      .select('_id guestId cabinId')
+
+      .lean();
+
+    if (!expiredBookings.length) return;
+
+    // 2. update them
+    await this.bookingModel.updateMany(
+      { _id: { $in: expiredBookings.map((b) => b._id) } },
+      {
+        $set: {
+          status: BookingStatus.EXPIRED,
+          active: false,
+          expiredAt: now,
         },
-        options?.session ? { session: options.session } : {},
+      },
+      { session },
+    );
+
+    // 3. emit events AFTER update
+    for (const booking of expiredBookings) {
+      this.eventEmitter.emit(
+        'booking.expired',
+        new BookingExpiredEvent(
+          booking._id.toString(),
+          booking.guestId.toString(),
+          booking.cabinId.toString(),
+        ),
       );
     }
   }

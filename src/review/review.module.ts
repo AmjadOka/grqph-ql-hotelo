@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ReviewService } from './review.service';
 import { ReviewResolver } from './review.resolver';
-import { ReviewStatsListener } from './review-stats.listener';
+import { ReviewStatsListener } from '../common/listeners/review-stats.listener';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Review, ReviewSchema } from './review.schema';
 import { Cabin, CabinSchema } from 'src/cabin/cabin.schema';
+import { ReviewEventPublisher } from 'src/common/events/review-event.publisher';
+import { CabinStatsService } from 'src/common/services/cabin-stats.service';
 
 @Module({
   imports: [
@@ -13,7 +15,14 @@ import { Cabin, CabinSchema } from 'src/cabin/cabin.schema';
       { name: Cabin.name, schema: CabinSchema },
     ]),
   ],
-  providers: [ReviewResolver, ReviewService, ReviewStatsListener],
+  providers: [
+    ReviewResolver,
+    ReviewService,
+
+    ReviewEventPublisher,
+    CabinStatsService,
+    ReviewStatsListener,
+  ],
   exports: [ReviewService],
 })
 export class ReviewModule {}

@@ -7,8 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Model, Types } from 'mongoose';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 
@@ -18,10 +17,10 @@ import { buildQuery, BaseQuery } from 'src/common/utils/query-builder';
 import { UserRole } from 'src/user/user.schema';
 import { UpdateReviewInput } from './dto/update-review.input';
 import { CreateReviewInput } from './dto/create-review.input';
-import { ReviewEvents } from './review.event';
-import { reviewListIndexKey } from './review-stats.listener';
+import { reviewListIndexKey } from '../common/listeners/review-stats.listener';
 import { ReviewQueryInput } from './dto/review-query.input';
 import type { AuthUser } from 'src/common/types/AuthUser';
+import { ReviewEventPublisher } from 'src/common/events/review-event.publisher';
 
 /** Cache TTL for review lists (seconds) */
 const REVIEW_CACHE_TTL = 60;
@@ -43,9 +42,20 @@ export class ReviewService {
   constructor(
     @InjectModel(Review.name) private reviewModel: Model<Review>,
     @InjectModel(Cabin.name) private cabinModel: Model<Cabin>,
-    private readonly eventEmitter: EventEmitter2,
+    private readonly reviewEvents: ReviewEventPublisher,
     @Inject(CACHE_MANAGER) private cache: Cache,
   ) {}
+
+  /**
+   * Safe ObjectId validator
+   */
+  private ensureValidObjectId(id: string, field: string): Types.ObjectId {
+    if (!id || !Types.ObjectId.isValid(id)) {
+      throw new BadRequestException(`${field} is invalid`);
+    }
+
+    return new Types.ObjectId(id);
+  }
 
   /* =====================================================
      PRIVATE — CACHE HELPERS
@@ -71,11 +81,6 @@ export class ReviewService {
     }
   }
 
-  /** Emit the domain event — the listener handles stats + cache invalidation */
-  private emitReviewChanged(cabinId: string): void {
-    this.eventEmitter.emit(ReviewEvents.CHANGED, { cabinId });
-  }
-
   /* =====================================================
      CREATE REVIEW
   ===================================================== */
@@ -91,15 +96,19 @@ export class ReviewService {
    * After creation, emits `review.changed` → listener recomputes cabin stats
    * and busts all related caches.
    */
-  async create(userId: string, input: CreateReviewInput): Promise<Review> {
-    const { cabinId, rating, comment } = input;
+  async create(user: string, input: CreateReviewInput): Promise<Review> {
+    const { cabinId: cabin, rating, comment } = input;
 
     this.assertRatingValid(rating);
-
+    const userId = this.ensureValidObjectId(user, 'User ID');
+    const cabinId = this.ensureValidObjectId(cabin, 'cabin ID');
     const cabinExist = await this.cabinModel.findById(cabinId);
     if (!cabinExist) throw new NotFoundException('Cabin not found');
 
-    const exists = await this.reviewModel.findOne({ userId, cabinId });
+    const exists = await this.reviewModel.findOne({
+      userId,
+      cabinId,
+    });
     if (exists) {
       throw new BadRequestException('You already reviewed this cabin');
     }
@@ -111,7 +120,7 @@ export class ReviewService {
       comment,
     });
 
-    this.emitReviewChanged(cabinId.toString());
+    this.reviewEvents.reviewChanged(cabinId);
     return review;
   }
 
@@ -154,7 +163,7 @@ export class ReviewService {
 
     const saved = await review.save();
 
-    this.emitReviewChanged(review.cabinId.toString());
+    this.reviewEvents.reviewChanged(review.cabinId);
     return saved;
   }
 
@@ -168,24 +177,22 @@ export class ReviewService {
    * - The review's author OR a MANAGER may delete.
    * Emits `review.changed` afterward.
    */
-  async delete(
-    user: AuthUser,
-    reviewId: string,
-  ): Promise<{ success: boolean }> {
-    const review = await this.reviewModel.findById(reviewId);
-    if (!review) throw new NotFoundException('Review not found');
+  async delete(user: AuthUser, review: string): Promise<{ success: boolean }> {
+    const reviewId = this.ensureValidObjectId(review, 'Review ID');
+    const foundReview = await this.reviewModel.findById(reviewId);
+    if (!foundReview) throw new NotFoundException('Review not found');
 
     if (
-      review.userId.toString() !== user._id &&
+      foundReview.userId.toString() !== user._id &&
       user.role !== UserRole.MANAGER
     ) {
       throw new ForbiddenException('Not allowed');
     }
 
-    const cabinId = review.cabinId.toString();
+    const cabinId = foundReview.cabinId.toString();
     await this.reviewModel.deleteOne({ _id: reviewId });
 
-    this.emitReviewChanged(cabinId);
+    this.reviewEvents.reviewChanged(cabinId);
     return { success: true };
   }
 
@@ -198,12 +205,14 @@ export class ReviewService {
    * Supports optional `cabinId` and `userId` filters.
    * No caching — managers need real-time data.
    */
-  async findAll(query: BaseQuery & { cabinId?: string; userId?: string }) {
+  async findAll(
+    query: BaseQuery & { cabinId?: Types.ObjectId; userId?: Types.ObjectId },
+  ) {
+    console.log(typeof query.userId);
     return buildQuery(this.reviewModel, query, {
       defaultSort: 'createdAt',
       searchFields: ['comment'],
       skipFields: ['cabinId', 'userId'],
-      // FIX: use correct field names (cabinId / userId) not (cabin / user)
       customFilter: (q) => {
         const filter: Record<string, any> = {};
         if (q.cabinId) filter.cabinId = q.cabinId;
@@ -221,17 +230,23 @@ export class ReviewService {
    * Returns a paginated list of all reviews made by a specific user.
    * Cached per user+query combination (TTL 60s).
    */
-  async findByUser(userId: string, query: ReviewQueryInput) {
-    const cacheKey = this.userReviewCacheKey(userId, query);
+  async findByUser(user: string, query: ReviewQueryInput) {
+    const userId = this.ensureValidObjectId(user, 'User ID');
+    const cacheKey = this.userReviewCacheKey(user, query);
     const cached = await this.cache.get<ReviewPaginatedResult>(cacheKey);
     if (cached) return cached;
 
-    const data = await buildQuery(this.reviewModel, query, {
-      defaultSort: 'createdAt',
-      skipFields: ['userId'],
-      // FIX: use correct field name (userId) not (user)
-      customFilter: () => ({ userId }),
-    });
+    const data = await buildQuery(
+      this.reviewModel,
+      query as unknown as Record<string, unknown>,
+      {
+        searchFields: ['rating', 'comment'],
+
+        defaultSort: 'createdAt',
+        skipFields: ['userId'],
+        customFilter: () => ({ userId }),
+      },
+    );
 
     await this.cache.set(cacheKey, data, REVIEW_CACHE_TTL);
     return data;
@@ -250,13 +265,13 @@ export class ReviewService {
    * - Miss → query DB, cache result, register key in cabin-scoped index
    * - Invalidation → triggered by `review.changed` event via ReviewStatsListener
    */
-  async findByCabin(cabinId: string, query: ReviewQueryInput) {
-    query.cabinId = '';
-    const cacheKey = this.reviewCacheKey(cabinId, query);
+  async findByCabin(cabin: string, query: ReviewQueryInput) {
+    const cacheKey = this.reviewCacheKey(cabin, query);
+    const cabinId = this.ensureValidObjectId(cabin, 'Cabin ID');
     const cached = await this.cache.get<ReviewPaginatedResult>(cacheKey);
     if (cached) return cached;
 
-    const data = await buildQuery(this.reviewModel, query, {
+    const data = await buildQuery(this.reviewModel, query && cabinId, {
       defaultSort: 'createdAt',
       searchFields: ['comment'],
       skipFields: ['cabinId'],
@@ -265,7 +280,7 @@ export class ReviewService {
     });
 
     await this.cache.set(cacheKey, data, REVIEW_CACHE_TTL);
-    await this.trackCabinListKey(cabinId, cacheKey);
+    await this.trackCabinListKey(cabin, cacheKey);
     return data;
   }
 

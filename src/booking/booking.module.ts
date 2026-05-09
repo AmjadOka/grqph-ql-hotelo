@@ -8,6 +8,7 @@ import { Cabin, CabinSchema } from 'src/cabin/cabin.schema';
 import { UserLoader } from './loaders/user.loader';
 import { CabinLoader } from './loaders/cabin.loader';
 import { BookingScheduler } from './booking.scheduler';
+import { BookingListener } from 'src/common/listeners/booking.listener';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { BookingScheduler } from './booking.scheduler';
     UserLoader,
     CabinLoader,
     BookingScheduler,
+    BookingListener,
   ],
 })
 export class BookingModule {}

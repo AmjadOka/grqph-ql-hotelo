@@ -9,13 +9,13 @@ import {
   Max,
   Min,
 } from 'class-validator';
-
+import { Types } from 'mongoose';
 @InputType()
 export class UpdateReviewInput {
   @Field(() => ID)
   @IsMongoId({ message: 'The cabinId must be a valid MongoDB ObjectId' })
   @IsNotEmpty({ message: 'Cabin ID is required' })
-  reviewId: string;
+  reviewId: Types.ObjectId;
 
   @Field(() => Int)
   @IsNumber({}, { message: 'Must be a number' })

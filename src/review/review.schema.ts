@@ -7,6 +7,10 @@ import { Cabin } from '../cabin/cabin.schema';
 @ObjectType()
 @Schema({ timestamps: true })
 export class Review extends Document {
+  @Field(() => ID)
+  get id(): string {
+    return this._id.toString();
+  }
   /* =========================
      RELATIONS
   ========================= */

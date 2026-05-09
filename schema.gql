@@ -168,6 +168,7 @@ type UploadResponse {
 }
 
 type Review {
+  id: ID!
   userId: ID!
   cabinId: ID!
   rating: Int!
@@ -270,8 +271,6 @@ input BookingQueryInput {
 }
 
 input ReviewQueryInput {
-  cabinId: ID
-  userId: ID
   search: String
   page: Int = 1
   limit: Int = 10
@@ -401,7 +400,7 @@ input UpdateSettingsInput {
 scalar Upload
 
 input CreateReviewInput {
-  cabinId: String!
+  cabinId: ID!
   rating: Int!
   comment: String
 }

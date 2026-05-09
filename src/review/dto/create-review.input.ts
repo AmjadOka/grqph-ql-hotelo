@@ -1,4 +1,4 @@
-import { InputType, Field, Int } from '@nestjs/graphql';
+import { InputType, Field, Int, ID } from '@nestjs/graphql';
 import { Type } from 'class-transformer';
 import {
   IsMongoId,
@@ -11,7 +11,7 @@ import {
 } from 'class-validator';
 @InputType()
 export class CreateReviewInput {
-  @Field(() => String)
+  @Field(() => ID)
   @IsMongoId({ message: 'The cabinId must be a valid MongoDB ObjectId' })
   @IsNotEmpty({ message: 'Cabin ID is required' })
   cabinId: string;

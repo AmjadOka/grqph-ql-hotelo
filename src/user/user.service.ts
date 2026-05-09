@@ -57,7 +57,6 @@ export class UserService {
        * Used to manually control specific query behavior
        */
       customFilter(query) {
-        // FIX: proper undefined check
         if (query.active !== undefined && query.active !== null) {
           return { active: query.active };
         }
