@@ -3,9 +3,9 @@ import { ObjectType, Field, registerEnumType, ID } from '@nestjs/graphql';
 import { Document, Schema as MongooseSchema } from 'mongoose'; // Ensure MongooseSchema is imported
 
 export enum UserRole {
-  GUEST = 'guest',
-  EMPLOYEE = 'employee',
-  MANAGER = 'manager',
+  GUEST = 'GUEST',
+  EMPLOYEE = 'EMPLOYEE',
+  MANAGER = 'MANAGER',
 }
 
 // This allows us to use the enum in our GraphQL queries/mutations

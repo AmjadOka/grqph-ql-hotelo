@@ -4,7 +4,6 @@ import {
   ForbiddenException,
   BadRequestException,
   Inject,
-  Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -21,6 +20,7 @@ import { reviewListIndexKey } from '../common/listeners/review-stats.listener';
 import { ReviewQueryInput } from './dto/review-query.input';
 import type { AuthUser } from 'src/common/types/AuthUser';
 import { ReviewEventPublisher } from 'src/common/events/review-event.publisher';
+import { Booking, BookingStatus } from 'src/booking/booking.schema';
 
 /** Cache TTL for review lists (seconds) */
 const REVIEW_CACHE_TTL = 60;
@@ -37,11 +37,13 @@ export interface ReviewPaginatedResult {
 
 @Injectable()
 export class ReviewService {
-  private readonly logger = new Logger(ReviewService.name);
+  //private readonly logger = new Logger(ReviewService.name);
 
   constructor(
     @InjectModel(Review.name) private reviewModel: Model<Review>,
+
     @InjectModel(Cabin.name) private cabinModel: Model<Cabin>,
+    @InjectModel(Booking.name) private bookingModel: Model<Booking>,
     private readonly reviewEvents: ReviewEventPublisher,
     @Inject(CACHE_MANAGER) private cache: Cache,
   ) {}
@@ -97,30 +99,48 @@ export class ReviewService {
    * and busts all related caches.
    */
   async create(user: string, input: CreateReviewInput): Promise<Review> {
-    const { cabinId: cabin, rating, comment } = input;
+    const { bookingId: booking, rating, comment } = input;
 
     this.assertRatingValid(rating);
-    const userId = this.ensureValidObjectId(user, 'User ID');
-    const cabinId = this.ensureValidObjectId(cabin, 'cabin ID');
-    const cabinExist = await this.cabinModel.findById(cabinId);
-    if (!cabinExist) throw new NotFoundException('Cabin not found');
 
+    const userId = this.ensureValidObjectId(user, 'User ID');
+    const bookingId = this.ensureValidObjectId(booking, 'Booking ID');
+
+    // Prevent duplicate review
     const exists = await this.reviewModel.findOne({
-      userId,
-      cabinId,
+      bookingId,
     });
     if (exists) {
-      throw new BadRequestException('You already reviewed this cabin');
+      throw new BadRequestException('Booking already reviewed');
+    }
+
+    // Find booking
+    const foundBooking = await this.bookingModel.findById(bookingId);
+
+    if (!foundBooking) {
+      throw new NotFoundException('Booking not found');
+    }
+
+    // Ownership validation
+    if (foundBooking.guestId.toString() !== userId.toString()) {
+      throw new ForbiddenException('You can review only your bookings');
+    }
+
+    // Only checked out bookings
+    if (foundBooking.status !== BookingStatus.CHECKED_OUT) {
+      throw new BadRequestException('You can review only completed stays');
     }
 
     const review = await this.reviewModel.create({
+      bookingId,
       userId,
-      cabinId,
+      cabinId: foundBooking.cabinId,
       rating,
       comment,
     });
 
-    this.reviewEvents.reviewChanged(cabinId);
+    this.reviewEvents.reviewChanged(foundBooking.cabinId);
+
     return review;
   }
 
@@ -235,7 +255,6 @@ export class ReviewService {
     const cacheKey = this.userReviewCacheKey(user, query);
     const cached = await this.cache.get<ReviewPaginatedResult>(cacheKey);
     if (cached) return cached;
-
     const data = await buildQuery(
       this.reviewModel,
       query as unknown as Record<string, unknown>,

@@ -14,7 +14,7 @@ export class CreateReviewInput {
   @Field(() => ID)
   @IsMongoId({ message: 'The cabinId must be a valid MongoDB ObjectId' })
   @IsNotEmpty({ message: 'Cabin ID is required' })
-  cabinId: string;
+  bookingId: string;
 
   @Field(() => Int)
   @IsNumber({}, { message: 'Must be a number' })

@@ -7,7 +7,7 @@ export class BookingListener {
   private readonly logger = new Logger(BookingListener.name);
 
   @OnEvent('booking.expired')
-  async handleBookingExpired(event: BookingExpiredEvent) {
+  handleBookingExpired(event: BookingExpiredEvent) {
     this.logger.debug(
       `Booking expired: ${event.bookingId} (guest: ${event.guestId})`,
     );

@@ -10,43 +10,67 @@ import { Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { User, UserRole } from 'src/user/user.schema';
 import { SignUpInput } from './dto/sign-up.input';
 import { SignInInput } from './dto/sign-in.input';
+import { SafeUser } from './auth.types';
 
 const SALT_ROUNDS = 10;
+const MAX_RESET_ATTEMPTS = 3;
+
+// ─── Token payload types ────────────────────────────────────────────────────
+
+interface TokenPayload {
+  sub: string; // standard JWT subject claim (userId)
+  role: UserRole;
+  type: 'access' | 'refresh'; // prevents refresh token being used as access token
+}
 
 @Injectable()
 export class AuthService {
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<User>,
     private readonly jwtService: JwtService,
+    private readonly configService: ConfigService, // FIX 1: inject ConfigService to use explicit secrets
   ) {}
 
   /* =====================================================
      TOKEN HELPERS
   ===================================================== */
 
-  /**
-   * Generates access + refresh tokens
-   */
-  private async generateTokens(payload: { _id: any; role: UserRole }) {
-    const accessToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '1d',
-    });
+  private async generateTokens(userId: string, role: UserRole) {
+    const accessPayload: TokenPayload = { sub: userId, role, type: 'access' };
+    const refreshPayload: TokenPayload = { sub: userId, role, type: 'refresh' };
 
-    const refreshToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '7d',
-    });
+    const [accessToken, refreshToken] = await Promise.all([
+      this.jwtService.signAsync(accessPayload, {
+        secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
+        expiresIn: '1d',
+      }),
+      this.jwtService.signAsync(refreshPayload, {
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+        expiresIn: '7d',
+      }),
+    ]);
 
     return { accessToken, refreshToken };
   }
 
   /**
-   * Hash refresh token before saving in DB
+   * Hash refresh token before saving in DB.
    */
-  private hashToken(token: string) {
+  private hashToken(token: string): string {
     return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  private sanitizeUser(user: User): SafeUser {
+    return {
+      _id: user._id.toString(),
+      email: user.email,
+      fullName: user.fullName,
+      role: user.role,
+    };
   }
 
   /* =====================================================
@@ -54,40 +78,35 @@ export class AuthService {
   ===================================================== */
 
   async signUp(signUpDto: SignUpInput) {
-    const existinguser = await this.userModel.findOne({
+    const existingUser = await this.userModel.findOne({
       email: signUpDto.email,
     });
 
-    if (existinguser) {
-      throw new ConflictException('An user with this email already exists');
+    if (existingUser) {
+      throw new ConflictException('A user with this email already exists');
     }
 
     const hashedPassword = await bcrypt.hash(signUpDto.password, SALT_ROUNDS);
 
-    const newuser = await this.userModel.create({
-      ...signUpDto,
-      password: hashedPassword,
+    const newUser = await this.userModel.create({
+      email: signUpDto.email,
       fullName: signUpDto.name,
+      password: hashedPassword,
       role: UserRole.GUEST,
       active: true,
     });
 
-    const payload = {
-      _id: newuser._id,
-      role: newuser.role,
-    };
+    const tokens = await this.generateTokens(
+      newUser._id.toString(),
+      newUser.role,
+    );
 
-    const tokens = await this.generateTokens(payload);
-
-    /**
-     * Store hashed refresh token in DB
-     */
-    newuser.refreshTokenHash = this.hashToken(tokens.refreshToken);
-    await newuser.save();
+    newUser.refreshTokenHash = this.hashToken(tokens.refreshToken);
+    await newUser.save();
 
     return {
       status: 201,
-      message: 'user registered successfully',
+      message: 'User registered successfully',
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
     };
@@ -98,32 +117,28 @@ export class AuthService {
   ===================================================== */
 
   async signIn(signInDto: SignInInput) {
-    const user = await this.userModel.findOne({
-      email: signInDto.email,
-    });
+    const user = await this.userModel.findOne({ email: signInDto.email });
 
     if (!user || !(await bcrypt.compare(signInDto.password, user.password))) {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    const payload = {
-      _id: user._id,
-      role: user.role,
-    };
+    if (!user.active) {
+      throw new UnauthorizedException('Account is deactivated');
+    }
 
-    const tokens = await this.generateTokens(payload);
+    const tokens = await this.generateTokens(user._id.toString(), user.role);
 
-    /**
-     * Rotate refresh token on login
-     */
+    // Rotate refresh token on every login
     user.refreshTokenHash = this.hashToken(tokens.refreshToken);
     await user.save();
 
     return {
       status: 200,
+      message: 'Login successful',
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      data: user,
+      data: this.sanitizeUser(user),
     };
   }
 
@@ -132,40 +147,50 @@ export class AuthService {
   ===================================================== */
 
   async refreshToken(refreshToken: string) {
+    let payload: TokenPayload;
+
     try {
-      const payload = await this.jwtService.verifyAsync(refreshToken);
-
-      const user = await this.userModel.findById(payload._id);
-
-      if (!user || !user.refreshTokenHash) {
-        throw new UnauthorizedException('Invalid refresh token');
-      }
-
-      const hashed = this.hashToken(refreshToken);
-
-      if (hashed !== user.refreshTokenHash) {
-        throw new UnauthorizedException('Refresh token mismatch');
-      }
-
-      const newTokens = await this.generateTokens({
-        _id: user._id,
-        role: user.role,
+      payload = await this.jwtService.verifyAsync<TokenPayload>(refreshToken, {
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
       });
-
-      /**
-       * Rotate refresh token (security best practice)
-       */
-      user.refreshTokenHash = this.hashToken(newTokens.refreshToken);
-      await user.save();
-
-      return {
-        status: 200,
-        accessToken: newTokens.accessToken,
-        refreshToken: newTokens.refreshToken,
-      };
     } catch {
-      throw new UnauthorizedException('Invalid refresh token');
+      throw new UnauthorizedException('Invalid or expired refresh token');
     }
+
+    if (payload.type !== 'refresh') {
+      throw new UnauthorizedException('Invalid token type');
+    }
+
+    const user = await this.userModel.findById(payload.sub);
+
+    if (!user || !user.refreshTokenHash) {
+      throw new UnauthorizedException(
+        'Session not found — please log in again',
+      );
+    }
+
+    const hashed = this.hashToken(refreshToken);
+
+    if (hashed !== user.refreshTokenHash) {
+      // Token reuse detected — wipe all sessions (security: refresh token rotation attack)
+      user.refreshTokenHash = undefined;
+      await user.save();
+      throw new UnauthorizedException(
+        'Token reuse detected — please log in again',
+      );
+    }
+
+    const newTokens = await this.generateTokens(user._id.toString(), user.role);
+
+    // Rotate refresh token
+    user.refreshTokenHash = this.hashToken(newTokens.refreshToken);
+    await user.save();
+
+    return {
+      status: 200,
+      accessToken: newTokens.accessToken,
+      refreshToken: newTokens.refreshToken,
+    };
   }
 
   /* =====================================================
@@ -179,37 +204,21 @@ export class AuthService {
       throw new BadRequestException('User not found');
     }
 
-    /**
-     * Invalidate refresh token
-     */
     await this.userModel.updateOne(
       { _id: user._id },
-      {
-        $unset: {
-          refreshTokenHash: 1,
-        },
-      },
+      { $unset: { refreshTokenHash: 1 } },
     );
+
     return {
       status: 200,
       message: 'Logged out successfully',
     };
   }
 
-  // -------------------------------//-------------------------------//
-  //-------------------Reset Password-------------------//
-  // -------------------------------//-------------------------------//
+  /* =====================================================
+     PASSWORD RESET — Step 1: Send Code
+  ===================================================== */
 
-  /**
-   * Step 1:
-   * Generate reset code + token
-   *
-   * Best practice:
-   * - Do NOT reveal if email exists
-   * - Store expiry (10 minutes)
-   * - Store hashed token (never plain token)
-   * - Store number of attempts
-   */
   async resetPassword(email: string) {
     const user = await this.userModel.findOne({ email });
 
@@ -233,72 +242,55 @@ export class AuthService {
 
     const code = Math.floor(100000 + Math.random() * 900000).toString();
 
-    /**
-     * FULL RESET OF OLD ATTEMPT STATE
-     * This is what you were missing
-     */
     user.resetCode = code;
-    user.resetExpires = new Date(Date.now() + 10 * 60 * 1000);
+    user.resetExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
     user.resetAttempts = 0;
     user.isResetVerified = false;
     user.resetLastSentAt = new Date();
 
     await user.save();
 
+    // TODO: inject MailService and send email here
+    // await this.mailService.sendResetCode(email, code);
+
     return {
       status: 200,
-      message: 'Reset code sent successfully',
+      message: 'If the email exists, a reset code was sent.',
     };
   }
 
-  /**
-   * Step 2:
-   * Verify OTP before allowing password change
-   */
+  /* =====================================================
+     PASSWORD RESET — Step 2: Verify Code
+  ===================================================== */
+
   async verifyResetCode(email: string, code: string) {
     const user = await this.userModel.findOne({
       email,
-      resetExpires: { $gt: new Date() },
+      resetExpires: { $gt: new Date() }, // only fetch non-expired
     });
 
     if (!user) {
       throw new BadRequestException('Invalid or expired code');
     }
 
-    /**
-     * INIT ATTEMPTS IF NULL
-     */
-    if (user.resetAttempts === undefined || user.resetAttempts === null) {
-      user.resetAttempts = 0;
-    }
-
-    /**
-     * BLOCK AFTER 3 FAILED ATTEMPTS
-     */
-    if (user.resetExpires && user.resetExpires < new Date()) {
-      user.resetAttempts = 0;
-      await user.save();
-      throw new BadRequestException('Code expired. Request a new one.');
-    }
-
-    /**
-     * INVALID CODE → increase attempts
-     */
-    if (user.resetCode !== code) {
-      user.resetAttempts += 1;
-      await user.save();
-
+    if ((user.resetAttempts ?? 0) >= MAX_RESET_ATTEMPTS) {
       throw new BadRequestException(
-        `Invalid code. Attempts left: ${3 - user.resetAttempts}`,
+        'Too many failed attempts. Please request a new code.',
       );
     }
 
-    /**
-     * SUCCESS
-     */
+    if (user.resetCode !== code) {
+      user.resetAttempts = (user.resetAttempts ?? 0) + 1;
+      await user.save();
+
+      const attemptsLeft = MAX_RESET_ATTEMPTS - user.resetAttempts;
+      throw new BadRequestException(
+        `Invalid code. ${attemptsLeft} attempt${attemptsLeft === 1 ? '' : 's'} remaining.`,
+      );
+    }
+
     user.isResetVerified = true;
     user.resetAttempts = 0;
-
     await user.save();
 
     return {
@@ -307,15 +299,10 @@ export class AuthService {
     };
   }
 
-  /**
-   * Step 3:
-   * Actually change password after verification
-   *
-   * SECURITY RULES:
-   * - Must verify reset first
-   * - Must hash password
-   * - Must clear reset session
-   */
+  /* =====================================================
+     PASSWORD RESET — Step 3: Change Password
+  ===================================================== */
+
   async changePassword(email: string, newPassword: string) {
     const user = await this.userModel.findOne({ email });
 
@@ -327,13 +314,12 @@ export class AuthService {
       throw new BadRequestException('Reset code not verified');
     }
 
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
 
-    user.password = hashedPassword;
+    // Invalidate all active sessions after password change
+    user.refreshTokenHash = undefined;
 
-    /**
-     * FULL CLEANUP AFTER SUCCESS
-     */
+    // Full cleanup
     user.resetCode = undefined;
     user.resetExpires = undefined;
     user.isResetVerified = false;

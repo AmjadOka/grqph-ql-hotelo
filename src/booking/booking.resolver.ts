@@ -92,6 +92,7 @@ export class BookingResolver {
    *
    * Same N+1 protection as the guest resolver above.
    */
+
   @ResolveField(() => Cabin)
   cabin(@Parent() booking: Booking) {
     return this.cabinLoader.batch.load(booking.cabinId.toString());

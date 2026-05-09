@@ -169,6 +169,7 @@ type UploadResponse {
 
 type Review {
   id: ID!
+  bookingId: ID!
   userId: ID!
   cabinId: ID!
   rating: Int!
@@ -341,7 +342,7 @@ input UpdateUserInput {
   fullName: String
   email: String
   password: String
-  role: UserRole = GUEST
+  role: UserRole
   phoneNumber: String
   avatar: String
 }
@@ -400,7 +401,7 @@ input UpdateSettingsInput {
 scalar Upload
 
 input CreateReviewInput {
-  cabinId: ID!
+  bookingId: ID!
   rating: Int!
   comment: String
 }

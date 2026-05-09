@@ -1,5 +1,6 @@
 import { ObjectType, Field, Int } from '@nestjs/graphql';
 import { User } from 'src/user/user.schema';
+import type { SafeUser } from '../auth.types';
 
 @ObjectType()
 export class AuthResponse {
@@ -16,7 +17,7 @@ export class AuthResponse {
   refreshToken: string;
 
   @Field(() => User, { nullable: true })
-  data?: User;
+  data?: SafeUser;
 }
 
 @ObjectType()

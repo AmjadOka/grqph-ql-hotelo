@@ -7,12 +7,14 @@ import { Review, ReviewSchema } from './review.schema';
 import { Cabin, CabinSchema } from 'src/cabin/cabin.schema';
 import { ReviewEventPublisher } from 'src/common/events/review-event.publisher';
 import { CabinStatsService } from 'src/common/services/cabin-stats.service';
+import { Booking, BookingSchema } from 'src/booking/booking.schema';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Review.name, schema: ReviewSchema },
       { name: Cabin.name, schema: CabinSchema },
+      { name: Booking.name, schema: BookingSchema },
     ]),
   ],
   providers: [

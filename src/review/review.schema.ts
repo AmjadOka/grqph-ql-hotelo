@@ -3,6 +3,7 @@ import { ObjectType, Field, ID, Int } from '@nestjs/graphql';
 import { Document, Types } from 'mongoose';
 import { User } from '../user/user.schema';
 import { Cabin } from '../cabin/cabin.schema';
+import { Booking } from 'src/booking/booking.schema';
 
 @ObjectType()
 @Schema({ timestamps: true })
@@ -14,6 +15,15 @@ export class Review extends Document {
   /* =========================
      RELATIONS
   ========================= */
+
+  @Field(() => ID)
+  @Prop({
+    type: Types.ObjectId,
+    ref: Booking.name,
+    required: true,
+    index: true,
+  })
+  bookingId: Types.ObjectId;
 
   @Field(() => ID)
   @Prop({ type: Types.ObjectId, ref: User.name, required: true, index: true })
@@ -50,6 +60,5 @@ export class Review extends Document {
 
 export const ReviewSchema = SchemaFactory.createForClass(Review);
 
-// FIX: use correct field names (userId / cabinId) matching the @Prop definitions
-ReviewSchema.index({ userId: 1, cabinId: 1 }, { unique: true });
+ReviewSchema.index({ bookingId: 1 }, { unique: true });
 ReviewSchema.index({ userId: 1, createdAt: -1 });

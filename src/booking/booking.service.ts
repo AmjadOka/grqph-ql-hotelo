@@ -9,7 +9,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, ClientSession, Types } from 'mongoose';
 import { differenceInCalendarDays, isBefore } from 'date-fns';
 
-import { Booking, BookingStatus } from './booking.schema';
+import { Booking, BookingStatus, PaymentStatus } from './booking.schema';
 import { Cabin } from '../cabin/cabin.schema';
 import { User, UserRole } from '../user/user.schema';
 
@@ -25,17 +25,15 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { BookingExpiredEvent } from 'src/common/events/booking-expired.event';
 
 /* =====================================================
-   TYPES
+   CONSTANTS
 ===================================================== */
 
-/** Statuses that occupy a cabin / guest slot (i.e. block new bookings) */
 const ACTIVE_BLOCKING_STATUSES = [
   BookingStatus.PENDING,
   BookingStatus.CONFIRMED,
   BookingStatus.CHECKED_IN,
 ];
 
-/** Statuses that are considered "terminal" and cannot be mutated further */
 const TERMINAL_STATUSES: BookingStatus[] = [
   BookingStatus.CANCELLED_BY_GUEST,
   BookingStatus.CANCELLED_BY_ADMIN,
@@ -44,6 +42,29 @@ const TERMINAL_STATUSES: BookingStatus[] = [
   BookingStatus.EXPIRED,
   BookingStatus.NO_SHOW,
 ];
+
+const PAYMENT_DUE_MINUTES = 15;
+
+/* =====================================================
+   TYPES
+===================================================== */
+
+export interface CabinAvailabilityResult {
+  cabinId: string;
+  available: boolean;
+  requestedRange: { startDate: Date; endDate: Date };
+  conflicts: Array<{
+    bookingId: string;
+    startDate: Date;
+    endDate: Date;
+    status: BookingStatus;
+  }>;
+  bookedRanges: Array<{
+    startDate: Date;
+    endDate: Date;
+    status: BookingStatus;
+  }>;
+}
 
 /* =====================================================
    SERVICE
@@ -64,6 +85,7 @@ export class BookingService {
 
     @InjectModel(User.name)
     private readonly userModel: Model<User>,
+
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
@@ -71,11 +93,6 @@ export class BookingService {
      PRIVATE — DATE HELPERS
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Strips the time component and returns a UTC midnight Date.
-   * Ensures date comparisons are always day-level, regardless of
-   * the caller's timezone or the value coming from user input.
-   */
   private toUtcDateOnly(value: string | Date): Date {
     const d = new Date(value);
     return new Date(
@@ -83,13 +100,6 @@ export class BookingService {
     );
   }
 
-  /**
-   * Guards against logically invalid date ranges:
-   * - check-out must be strictly after check-in
-   * - check-in must not be in the past
-   *
-   * Throws BadRequestException with a descriptive message on failure.
-   */
   private validateDates(start: Date, end: Date): void {
     const today = this.toUtcDateOnly(new Date());
 
@@ -102,10 +112,6 @@ export class BookingService {
     }
   }
 
-  /**
-   * Returns the number of nights between two UTC-midnight dates.
-   * Throws if the result is zero or negative (defensive guard).
-   */
   private getNights(start: Date, end: Date): number {
     const nights = differenceInCalendarDays(end, start);
 
@@ -120,25 +126,14 @@ export class BookingService {
      PRIVATE — AUTHORIZATION HELPERS
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Returns true when the acting user owns the booking.
-   */
   private isBookingOwner(booking: Booking, userId: string): boolean {
     return booking.guestId.toString() === userId;
   }
 
-  /**
-   * Returns true when the acting user has elevated privileges.
-   * Both ADMIN and MANAGER can manage any booking.
-   */
   private isPrivileged(user: AuthUser): boolean {
     return user.role === UserRole.MANAGER;
   }
 
-  /**
-   * Throws ForbiddenException unless the user owns the booking OR has
-   * elevated privileges.  Use this as a single authorisation gate.
-   */
   private assertOwnerOrPrivileged(booking: Booking, user: AuthUser): void {
     if (!this.isBookingOwner(booking, user._id) && !this.isPrivileged(user)) {
       throw new ForbiddenException('Access denied');
@@ -149,10 +144,6 @@ export class BookingService {
      PRIVATE — STATUS HELPERS
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Throws BadRequestException if the booking is in a terminal state
-   * (i.e. it can no longer be mutated).
-   */
   private assertMutable(booking: Booking): void {
     if (TERMINAL_STATUSES.includes(booking.status)) {
       throw new BadRequestException(
@@ -161,10 +152,6 @@ export class BookingService {
     }
   }
 
-  /**
-   * Throws BadRequestException if the booking is not in the expected status.
-   * Used by check-in / check-out flows where a specific prior state is required.
-   */
   private assertStatus(booking: Booking, expected: BookingStatus): void {
     if (booking.status !== expected) {
       throw new BadRequestException(
@@ -177,17 +164,6 @@ export class BookingService {
      PRIVATE — PRICING
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Calculates the breakdown of costs for a booking.
-   *
-   * - Cabin price  = (regularPrice − discount) × nights  (floored at 0)
-   * - Extras price = hasBreakfast ? guests × nights × BREAKFAST_RATE : 0
-   * - Total        = cabinPrice + extrasPrice
-   *
-   * The breakfast rate is intentionally a named constant so it can be
-   * updated in one place or moved to config.
-   */
-
   private calculatePrice(
     cabin: Cabin,
     nights: number,
@@ -196,19 +172,13 @@ export class BookingService {
   ): { cabinPrice: number; extrasPrice: number; totalPrice: number } {
     const regularPrice = Number(cabin.regularPrice ?? 0);
     const discount = Number(cabin.discount ?? 0);
-
     const nightlyRate = Math.max(regularPrice - discount, 0);
     const cabinPrice = nightlyRate * nights;
-
     const extrasPrice = hasBreakfast
       ? guests * nights * BookingService.BREAKFAST_RATE_PER_GUEST_PER_NIGHT
       : 0;
 
-    return {
-      cabinPrice,
-      extrasPrice,
-      totalPrice: cabinPrice + extrasPrice,
-    };
+    return { cabinPrice, extrasPrice, totalPrice: cabinPrice + extrasPrice };
   }
 
   /* ─────────────────────────────────────────────────────
@@ -216,10 +186,8 @@ export class BookingService {
   ───────────────────────────────────────────────────── */
 
   /**
-   * Returns a Mongoose filter that matches bookings which "block" a date
-   * range (i.e. overlap with [start, end) and are in an active status).
-   *
-   * Date overlap condition:  existing.start < end  AND  existing.end > start
+   * Date overlap:  existing.start < end  AND  existing.end > start
+   * Status is the single source of truth — `active` flag is secondary.
    */
   private buildConflictFilter(
     start: Date,
@@ -228,30 +196,17 @@ export class BookingService {
   ): Record<string, any> {
     const filter: Record<string, any> = {
       status: { $in: ACTIVE_BLOCKING_STATUSES },
-      active: true,
       startDate: { $lt: end },
       endDate: { $gt: start },
     };
 
     if (excludeId) {
-      filter._id = { $ne: excludeId };
+      filter._id = { $ne: new Types.ObjectId(excludeId) };
     }
 
     return filter;
   }
 
-  /**
-   * Validates that the requested cabin AND the guest have no overlapping
-   * active bookings.  Both checks run sequentially within the same session
-   * so the validation is transaction-safe.
-   *
-   * @param cabinId   Cabin being booked
-   * @param guestId   Guest making the booking
-   * @param start     Check-in date (UTC midnight)
-   * @param end       Check-out date (UTC midnight)
-   * @param excludeId Booking to ignore (used during updates to exclude self)
-   * @param session   Active Mongoose session for transaction safety
-   */
   private async assertNoConflicts(params: {
     cabinId: string;
     guestId: string;
@@ -264,19 +219,20 @@ export class BookingService {
     const baseFilter = this.buildConflictFilter(start, end, excludeId);
 
     const cabinConflict = await this.bookingModel
-      .findOne({ ...baseFilter, cabinId })
+      .findOne({ ...baseFilter, cabinId: new Types.ObjectId(cabinId) })
       .session(session);
+
     if (cabinConflict) {
       throw new ConflictException('Cabin already booked for selected dates');
     }
 
     const guestConflict = await this.bookingModel
-      .findOne({ ...baseFilter, guestId })
+      .findOne({ ...baseFilter, guestId: new Types.ObjectId(guestId) })
       .session(session);
 
     if (guestConflict) {
       throw new ConflictException(
-        'You already have another booking in this range',
+        'You already have another booking in this date range',
       );
     }
   }
@@ -285,9 +241,6 @@ export class BookingService {
      PRIVATE — LOOKUP HELPERS
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Safe ObjectId validator
-   */
   private ensureValidObjectId(id: string, field: string): Types.ObjectId {
     if (!id || !Types.ObjectId.isValid(id)) {
       throw new BadRequestException(`${field} is invalid`);
@@ -296,19 +249,13 @@ export class BookingService {
     return new Types.ObjectId(id);
   }
 
-  /**
-   * Fetches a booking by ID and throws NotFoundException if missing.
-   */
   private async findBookingOrFail(
     id: string,
     session?: ClientSession,
   ): Promise<Booking> {
     const bookingId = this.ensureValidObjectId(id, 'Booking ID');
-
     const query = this.bookingModel.findById(bookingId);
-
     if (session) query.session(session);
-
     const booking = await query.exec();
 
     if (!booking) {
@@ -318,19 +265,13 @@ export class BookingService {
     return booking;
   }
 
-  /**
-   * Fetches a cabin by ID and throws NotFoundException if missing.
-   */
   private async findCabinOrFail(
     id: string,
     session?: ClientSession,
   ): Promise<Cabin> {
     const cabinId = this.ensureValidObjectId(id, 'Cabin ID');
-
     const query = this.cabinModel.findById(cabinId);
-
     if (session) query.session(session);
-
     const cabin = await query.exec();
 
     if (!cabin) {
@@ -340,19 +281,13 @@ export class BookingService {
     return cabin;
   }
 
-  /**
-   * Fetches a user by ID and throws NotFoundException if missing.
-   */
   private async findUserOrFail(
     id: string,
     session?: ClientSession,
   ): Promise<User> {
     const userId = this.ensureValidObjectId(id, 'User ID');
-
     const query = this.userModel.findById(userId);
-
     if (session) query.session(session);
-
     const user = await query.exec();
 
     if (!user) {
@@ -361,17 +296,11 @@ export class BookingService {
 
     return user;
   }
+
   /* ─────────────────────────────────────────────────────
      PRIVATE — TRANSACTION HELPER
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Wraps a callback in a Mongoose session + transaction, ensuring the
-   * session is always ended regardless of success or failure.
-   *
-   * Usage keeps individual methods clean and avoids duplicating the
-   * try/finally pattern everywhere.
-   */
   private async withTransaction<T>(
     fn: (session: ClientSession) => Promise<T>,
   ): Promise<T> {
@@ -379,11 +308,8 @@ export class BookingService {
 
     try {
       session.startTransaction();
-
       const result = await fn(session);
-
       await session.commitTransaction();
-
       return result;
     } catch (e) {
       await session.abortTransaction();
@@ -392,27 +318,17 @@ export class BookingService {
       await session.endSession();
     }
   }
+
   /* ─────────────────────────────────────────────────────
      AUTO EXPIRE
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Marks all PENDING bookings whose payment hold has elapsed as EXPIRED.
-   *
-   * This is called at the start of any read or write operation that cares
-   * about availability, ensuring stale holds are cleaned up lazily rather
-   * than requiring a background cron (though a cron is a good complement).
-   *
-   * BUG FIX: the original query incorrectly filtered by `status: EXPIRED`.
-   * It should filter by `status: PENDING` — only pending bookings can expire.
-   */
   async autoExpirePendingBookings(options?: {
     session?: ClientSession;
     force?: boolean;
   }): Promise<void> {
     const now = new Date();
 
-    // skip if already recently run
     if (
       !options?.force &&
       this.lastExpirySweep &&
@@ -426,7 +342,6 @@ export class BookingService {
 
     const session = options?.session;
 
-    // 1. find bookings to expire
     const expiredBookings = await this.bookingModel
       .find(
         {
@@ -438,25 +353,18 @@ export class BookingService {
         { session },
       )
       .select('_id guestId cabinId')
-
       .lean();
 
     if (!expiredBookings.length) return;
 
-    // 2. update them
     await this.bookingModel.updateMany(
       { _id: { $in: expiredBookings.map((b) => b._id) } },
       {
-        $set: {
-          status: BookingStatus.EXPIRED,
-          active: false,
-          expiredAt: now,
-        },
+        $set: { status: BookingStatus.EXPIRED, active: false, expiredAt: now },
       },
       { session },
     );
 
-    // 3. emit events AFTER update
     for (const booking of expiredBookings) {
       this.eventEmitter.emit(
         'booking.expired',
@@ -473,24 +381,6 @@ export class BookingService {
      CREATE
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Creates a new booking inside a transaction.
-   *
-   * Flow:
-   * 1. Expire any stale pending holds
-   * 2. Validate date range
-   * 3. Assert cabin + user exist
-   * 4. Assert guest count ≤ cabin capacity
-   * 5. Check for date conflicts (cabin & guest)
-   * 6. Calculate pricing
-   * 7. Persist with a 15-minute payment hold (paymentDueAt)
-   *
-   * The booking starts in PENDING status; it becomes CONFIRMED once payment
-   * is captured via `confirmBooking`.
-   *
-   * @param input   Validated booking input DTO
-   * @param guestId Authenticated user's ID (injected from JWT)
-   */
   async create(input: CreateBookingInput, guestId: string): Promise<Booking> {
     return this.withTransaction(async (session) => {
       const { cabinId, startDate, endDate, numGuests, hasBreakfast } = input;
@@ -500,7 +390,7 @@ export class BookingService {
 
       this.validateDates(start, end);
 
-      //await this.autoExpirePendingBookings({ session });
+      await this.autoExpirePendingBookings({ session });
 
       const cabin = await this.findCabinOrFail(cabinId, session);
       const user = await this.findUserOrFail(guestId, session);
@@ -511,16 +401,9 @@ export class BookingService {
         );
       }
 
-      await this.assertNoConflicts({
-        cabinId,
-        guestId,
-        start,
-        end,
-        session,
-      });
+      await this.assertNoConflicts({ cabinId, guestId, start, end, session });
 
       const nights = this.getNights(start, end);
-
       const prices = this.calculatePrice(
         cabin,
         nights,
@@ -541,7 +424,10 @@ export class BookingService {
             ...prices,
             status: BookingStatus.PENDING,
             active: true,
-            paymentDueAt: new Date(Date.now() + 15 * 60 * 1000),
+            // FIX 4: Magic number replaced with named constant
+            paymentDueAt: new Date(
+              Date.now() + PAYMENT_DUE_MINUTES * 60 * 1000,
+            ),
           },
         ],
         { session },
@@ -550,26 +436,14 @@ export class BookingService {
       return booking;
     });
   }
+
   /* ─────────────────────────────────────────────────────
      READ — SINGLE
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Returns a single booking by ID, populating cabin and guest references.
-   *
-   * Admins and managers can fetch any booking.
-   * Guests can only fetch their own.
-   *
-   * @param id   Booking ObjectId
-   * @param user Authenticated user (used for ownership check)
-   */
   async findOne(id: string, user: AuthUser): Promise<Booking> {
-    const booking = await this.bookingModel.findById(id);
+    const booking = await this.findBookingOrFail(id);
 
-    if (!booking) {
-      throw new NotFoundException('Booking not found');
-    }
-    console.log(booking);
     if (!this.isPrivileged(user) && !this.isBookingOwner(booking, user._id)) {
       throw new ForbiddenException('Access denied');
     }
@@ -581,12 +455,6 @@ export class BookingService {
      READ — MY BOOKINGS
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Returns all bookings for the currently authenticated guest,
-   * sorted newest-first.
-   *
-   * @param user Authenticated user (guest)
-   */
   async findMyBookings(user: AuthUser): Promise<BookingListResponse> {
     const guestId =
       typeof user._id === 'string' ? new Types.ObjectId(user._id) : user._id;
@@ -595,46 +463,28 @@ export class BookingService {
       .find({ guestId })
       .sort({ createdAt: -1 });
 
-    return {
-      status: 200,
-      message: 'success',
-      data: bookings,
-    };
+    return { status: 200, message: 'success', data: bookings };
   }
+
   /* ─────────────────────────────────────────────────────
-     READ — ALL (ADMIN / MANAGER)
+     READ — ALL (MANAGER)
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Returns a paginated, filtered list of all bookings.
-   *
-   * Supported filter parameters (via BookingQueryInput):
-   * - `guestId`   — filter by guest
-   * - `cabinId`   — filter by cabin
-   * - `startDate` + `endDate` — range overlap filter
-   * - Standard `buildQuery` fields (page, limit, sort, search)
-   *
-   * Stale pending holds are expired before returning results.
-   *
-   * @param query Pagination + filter input
-   */
   async findAll(query: BookingQueryInput): Promise<PaginatedResult<Booking>> {
-    //  await this.autoExpirePendingBookings();
+    await this.autoExpirePendingBookings();
 
     return buildQuery(this.bookingModel, query, {
       defaultSort: 'createdAt',
-
       skipFields: ['guestId', 'cabinId', 'startDate', 'endDate'],
-
       customFilter: (q) => {
         const filter: Record<string, any> = {};
 
-        if (q.guestId) filter.guestId = q.guestId;
-        if (q.cabinId) filter.cabinId = q.cabinId;
+        if (q.guestId) filter.guestId = new Types.ObjectId(q.guestId);
+        if (q.cabinId) filter.cabinId = new Types.ObjectId(q.cabinId);
 
         if (q.startDate && q.endDate) {
-          filter.startDate = { $lt: q.endDate };
-          filter.endDate = { $gt: q.startDate };
+          filter.startDate = { $lt: new Date(q.endDate) };
+          filter.endDate = { $gt: new Date(q.startDate) };
         }
 
         return filter;
@@ -646,23 +496,6 @@ export class BookingService {
      UPDATE
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Updates mutable fields on an existing booking inside a transaction.
-   *
-   * Authorization rules:
-   * - Booking owner (guest) OR admin/manager may update
-   *
-   * Invariants enforced:
-   * - Booking must not be in a terminal status
-   * - New date range must be valid
-   * - Cabin must exist and have sufficient capacity
-   * - No conflicts with other active bookings (self excluded)
-   * - Prices are recalculated on every update
-   *
-   * @param id    Booking ObjectId
-   * @param dto   Partial update payload
-   * @param user  Authenticated user
-   */
   async updateBooking(
     id: string,
     dto: UpdateBookingInput,
@@ -690,7 +523,6 @@ export class BookingService {
         );
       }
 
-      console.log(id, 'id');
       await this.assertNoConflicts({
         cabinId,
         guestId: booking.guestId.toString(),
@@ -732,54 +564,43 @@ export class BookingService {
      CANCEL
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Soft-cancels a booking, recording who cancelled it and why.
-   *
-   * - Guests cancel their own booking → status CANCELLED_BY_GUEST
-   * - Admins/managers cancel any booking → status CANCELLED_BY_ADMIN
-   *
-   * BUG FIX: the original only checked `MANAGER` for the isAdmin path;
-   * ADMIN role was excluded, breaking admin-initiated cancellations.
-   *
-   * @param id     Booking ObjectId
-   * @param user   Authenticated user
-   * @param reason Optional human-readable cancellation reason
-   */
   async cancelBooking(
     id: string,
     user: AuthUser,
     reason?: string,
   ): Promise<Booking> {
-    const booking = await this.findBookingOrFail(id);
+    return this.withTransaction(async (session) => {
+      const booking = await this.findBookingOrFail(id, session);
 
-    this.assertOwnerOrPrivileged(booking, user); // ← now covers ADMIN too
+      this.assertOwnerOrPrivileged(booking, user);
 
-    if (
-      booking.status === BookingStatus.CANCELLED_SYSTEM ||
-      booking.status === BookingStatus.CANCELLED_BY_GUEST ||
-      booking.status === BookingStatus.CANCELLED_BY_ADMIN
-    ) {
-      throw new BadRequestException('Booking is already cancelled');
-    }
+      if (
+        booking.status === BookingStatus.CANCELLED_SYSTEM ||
+        booking.status === BookingStatus.CANCELLED_BY_GUEST ||
+        booking.status === BookingStatus.CANCELLED_BY_ADMIN
+      ) {
+        throw new BadRequestException('Booking is already cancelled');
+      }
 
-    this.assertMutable(booking);
+      this.assertMutable(booking);
 
-    const cancelledByAdmin = this.isPrivileged(user);
+      const cancelledByAdmin = this.isPrivileged(user);
 
-    booking.status = cancelledByAdmin
-      ? BookingStatus.CANCELLED_BY_ADMIN
-      : BookingStatus.CANCELLED_BY_GUEST;
+      booking.status = cancelledByAdmin
+        ? BookingStatus.CANCELLED_BY_ADMIN
+        : BookingStatus.CANCELLED_BY_GUEST;
 
-    booking.active = false;
-    booking.cancelReason =
-      reason ??
-      (cancelledByAdmin ? 'Cancelled by admin' : 'Cancelled by guest');
-    booking.cancelledAt = new Date();
-    booking.cancelledBy = new Types.ObjectId(user._id);
+      booking.active = false;
+      booking.cancelReason =
+        reason ??
+        (cancelledByAdmin ? 'Cancelled by admin' : 'Cancelled by guest');
+      booking.cancelledAt = new Date();
+      booking.cancelledBy = new Types.ObjectId(user._id);
 
-    await booking.save();
+      await booking.save({ session });
 
-    return booking;
+      return booking;
+    });
   }
 
   /* ─────────────────────────────────────────────────────
@@ -787,13 +608,7 @@ export class BookingService {
   ───────────────────────────────────────────────────── */
 
   /**
-   * Marks a booking as paid and transitions its status to CONFIRMED.
-   *
-   * This should be called after a successful payment webhook or manual
-   * payment confirmation by staff.  Only PENDING bookings can be confirmed
-   * — already confirmed or terminal bookings are rejected.
-   *
-   * @param id Booking ObjectId
+   * checks if paymentDueAt has already passed before confirming.
    */
   async confirmBooking(id: string): Promise<Booking> {
     const booking = await this.findBookingOrFail(id);
@@ -802,9 +617,20 @@ export class BookingService {
       throw new BadRequestException('Only pending bookings can be confirmed');
     }
 
+    if (booking.paymentDueAt && booking.paymentDueAt < new Date()) {
+      // Expire it on the spot instead of confirming a ghost booking
+      booking.status = BookingStatus.EXPIRED;
+      booking.active = false;
+      await booking.save();
+
+      throw new BadRequestException(
+        'Payment window has expired — booking has been cancelled automatically',
+      );
+    }
+
     booking.status = BookingStatus.CONFIRMED;
     booking.isPaid = true;
-
+    booking.paymentStatus = PaymentStatus.PAID;
     await booking.save();
 
     return booking;
@@ -814,18 +640,19 @@ export class BookingService {
      CHECK IN
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Transitions a booking from CONFIRMED → CHECKED_IN.
-   *
-   * Records the actual check-in timestamp.  Only staff (EMPLOYEE / MANAGER)
-   * should be allowed to call this (enforced in the resolver via @Roles).
-   *
-   * @param id Booking ObjectId
-   */
   async checkIn(id: string): Promise<Booking> {
     const booking = await this.findBookingOrFail(id);
 
     this.assertStatus(booking, BookingStatus.CONFIRMED);
+
+    const today = this.toUtcDateOnly(new Date());
+    const checkInDay = this.toUtcDateOnly(booking.startDate);
+
+    if (isBefore(today, checkInDay)) {
+      throw new BadRequestException(
+        `Check-in is not allowed before ${checkInDay.toISOString().split('T')[0]}`,
+      );
+    }
 
     booking.status = BookingStatus.CHECKED_IN;
     booking.checkedInAt = new Date();
@@ -839,18 +666,19 @@ export class BookingService {
      CHECK OUT
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Transitions a booking from CHECKED_IN → CHECKED_OUT.
-   *
-   * Records the actual check-out timestamp and deactivates the booking.
-   * The booking is considered fully complete after this step.
-   *
-   * @param id Booking ObjectId
-   */
   async checkOut(id: string): Promise<Booking> {
     const booking = await this.findBookingOrFail(id);
 
     this.assertStatus(booking, BookingStatus.CHECKED_IN);
+
+    const today = this.toUtcDateOnly(new Date());
+    const checkOutDay = this.toUtcDateOnly(booking.endDate);
+
+    if (isBefore(today, checkOutDay)) {
+      throw new BadRequestException(
+        `Check-out is not allowed before ${checkOutDay.toISOString().split('T')[0]}`,
+      );
+    }
 
     booking.status = BookingStatus.CHECKED_OUT;
     booking.active = false;
@@ -865,17 +693,10 @@ export class BookingService {
      MARK NO-SHOW
   ───────────────────────────────────────────────────── */
 
-  /**
-   * Marks a confirmed booking as NO_SHOW when the guest fails to arrive.
-   *
-   * Can only be applied to CONFIRMED bookings (not already checked-in).
-   * Deactivates the booking record.
-   *
-   * @param id   Booking ObjectId
-   * @param user Authenticated staff user (EMPLOYEE / MANAGER)
-   */
   async markNoShow(id: string, user: AuthUser): Promise<Booking> {
-    if (!this.isPrivileged(user) && user.role !== UserRole.EMPLOYEE) {
+    const canMark = this.isPrivileged(user) || user.role === UserRole.EMPLOYEE;
+
+    if (!canMark) {
       throw new ForbiddenException('Only staff can mark a no-show');
     }
 
@@ -889,5 +710,87 @@ export class BookingService {
     await booking.save();
 
     return booking;
+  }
+
+  /* ─────────────────────────────────────────────────────
+     CHECK CABIN AVAILABILITY  ← NEW
+  ───────────────────────────────────────────────────── */
+
+  /**
+   * Checks whether a cabin is available for a given date range.
+   *
+   * Returns:
+   * - `available`     — true if the range has zero blocking conflicts
+   * - `conflicts`     — bookings that directly overlap the requested range
+   * - `bookedRanges`  — ALL booked ranges for the cabin in the window
+   *                     (useful for calendar UIs to render unavailable dates)
+   *
+   * Flow:
+   * 1. Validate IDs and dates
+   * 2. Assert cabin exists
+   * 3. Expire any stale pending holds
+   * 4. Query for conflicts in the range
+   * 5. Query for all booked ranges in the same window (for the calendar)
+   *
+   * @param cabinId   Cabin to check
+   * @param startDate Check-in date (string or Date)
+   * @param endDate   Check-out date (string or Date)
+   */
+  async checkCabinAvailability(
+    cabinId: string,
+    startDate: string | Date,
+    endDate: string | Date,
+  ): Promise<CabinAvailabilityResult> {
+    // 1. Validate ObjectId
+    this.ensureValidObjectId(cabinId, 'Cabin ID');
+
+    const start = this.toUtcDateOnly(startDate);
+    const end = this.toUtcDateOnly(endDate);
+
+    // 2. Validate date range
+    this.validateDates(start, end);
+
+    // 3. Assert cabin exists
+    await this.findCabinOrFail(cabinId);
+
+    // 4. Expire stale holds so they don't pollute results
+    await this.autoExpirePendingBookings();
+
+    const conflictFilter = this.buildConflictFilter(start, end);
+
+    // 5. Conflicts — bookings that overlap the requested range
+    const conflicts = await this.bookingModel
+      .find({ ...conflictFilter, cabinId: new Types.ObjectId(cabinId) })
+      .select('_id startDate endDate status')
+      .lean();
+
+    // 6. All booked ranges in the same window (for calendar rendering)
+    //    Uses a wider query: any booking that overlaps this window at all.
+    const bookedRanges = await this.bookingModel
+      .find({
+        cabinId: new Types.ObjectId(cabinId),
+        status: { $in: ACTIVE_BLOCKING_STATUSES },
+        startDate: { $lt: end },
+        endDate: { $gt: start },
+      })
+      .select('startDate endDate status')
+      .lean();
+
+    return {
+      cabinId,
+      available: conflicts.length === 0,
+      requestedRange: { startDate: start, endDate: end },
+      conflicts: conflicts.map((c) => ({
+        bookingId: (c._id as Types.ObjectId).toString(),
+        startDate: c.startDate,
+        endDate: c.endDate,
+        status: c.status,
+      })),
+      bookedRanges: bookedRanges.map((r) => ({
+        startDate: r.startDate,
+        endDate: r.endDate,
+        status: r.status,
+      })),
+    };
   }
 }
