@@ -8,7 +8,8 @@ import { Cabin, CabinSchema } from 'src/cabin/cabin.schema';
 import { UserLoader } from './loaders/user.loader';
 import { CabinLoader } from './loaders/cabin.loader';
 import { BookingScheduler } from './booking.scheduler';
-import { BookingListener } from 'src/common/listeners/booking.listener';
+import { BookingEventPublisher } from 'src/notification/events/booking-event.publisher';
+import { NotificationModule } from 'src/notification/notification.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { BookingListener } from 'src/common/listeners/booking.listener';
       { name: Booking.name, schema: BookingSchema },
       { name: Cabin.name, schema: CabinSchema },
     ]),
+    NotificationModule,
   ],
   providers: [
     BookingResolver,
@@ -24,7 +26,7 @@ import { BookingListener } from 'src/common/listeners/booking.listener';
     UserLoader,
     CabinLoader,
     BookingScheduler,
-    BookingListener,
+    BookingEventPublisher,
   ],
 })
 export class BookingModule {}

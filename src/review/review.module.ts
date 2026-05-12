@@ -1,12 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ReviewService } from './review.service';
 import { ReviewResolver } from './review.resolver';
-import { ReviewStatsListener } from '../common/listeners/review-stats.listener';
+import { ReviewStatsListener } from 'src/notification/listeners/review-stats.listener';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Review, ReviewSchema } from './review.schema';
 import { Cabin, CabinSchema } from 'src/cabin/cabin.schema';
-import { ReviewEventPublisher } from 'src/common/events/review-event.publisher';
-import { CabinStatsService } from 'src/common/services/cabin-stats.service';
+import { ReviewEventPublisher } from 'src/notification/events/review-event.publisher';
+import { CabinStatsService } from 'src/notification/services/cabin-stats.service';
 import { Booking, BookingSchema } from 'src/booking/booking.schema';
 
 @Module({

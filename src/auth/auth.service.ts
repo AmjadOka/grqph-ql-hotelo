@@ -15,6 +15,7 @@ import { User, UserRole } from 'src/user/user.schema';
 import { SignUpInput } from './dto/sign-up.input';
 import { SignInInput } from './dto/sign-in.input';
 import { SafeUser } from './auth.types';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 const SALT_ROUNDS = 10;
 const MAX_RESET_ATTEMPTS = 3;
@@ -33,6 +34,7 @@ export class AuthService {
     @InjectModel(User.name) private readonly userModel: Model<User>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService, // FIX 1: inject ConfigService to use explicit secrets
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   /* =====================================================
@@ -66,10 +68,12 @@ export class AuthService {
 
   private sanitizeUser(user: User): SafeUser {
     return {
-      _id: user._id.toString(),
+      id: user.id.toString(),
       email: user.email,
       fullName: user.fullName,
       role: user.role,
+      avatar: user.avatar ?? '',
+      active: user.active,
     };
   }
 
@@ -104,6 +108,11 @@ export class AuthService {
     newUser.refreshTokenHash = this.hashToken(tokens.refreshToken);
     await newUser.save();
 
+    this.eventEmitter.emit('user.registered', {
+      userId: newUser._id.toString(),
+      email: newUser.email,
+      fullName: newUser.fullName,
+    });
     return {
       status: 201,
       message: 'User registered successfully',
@@ -127,12 +136,11 @@ export class AuthService {
       throw new UnauthorizedException('Account is deactivated');
     }
 
-    const tokens = await this.generateTokens(user._id.toString(), user.role);
+    const tokens = await this.generateTokens(user.id.toString(), user.role);
 
     // Rotate refresh token on every login
     user.refreshTokenHash = this.hashToken(tokens.refreshToken);
     await user.save();
-
     return {
       status: 200,
       message: 'Login successful',
@@ -180,7 +188,7 @@ export class AuthService {
       );
     }
 
-    const newTokens = await this.generateTokens(user._id.toString(), user.role);
+    const newTokens = await this.generateTokens(user.id.toString(), user.role);
 
     // Rotate refresh token
     user.refreshTokenHash = this.hashToken(newTokens.refreshToken);
@@ -205,7 +213,7 @@ export class AuthService {
     }
 
     await this.userModel.updateOne(
-      { _id: user._id },
+      { _id: user.id },
       { $unset: { refreshTokenHash: 1 } },
     );
 

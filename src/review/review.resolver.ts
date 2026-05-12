@@ -55,7 +55,7 @@ export class ReviewResolver {
     console.log('INPUT:', JSON.stringify(input));
     console.log('USER:', JSON.stringify(user));
 
-    const review = await this.reviewService.create(user._id, input);
+    const review = await this.reviewService.create(user.sub, input);
     return {
       status: 201,
       message: 'Review created successfully',
@@ -71,7 +71,7 @@ export class ReviewResolver {
     @Args('input') input: UpdateReviewInput,
     @CurrentUser() user: AuthUser,
   ): Promise<ReviewResponse> {
-    const review = await this.reviewService.update(user._id, input);
+    const review = await this.reviewService.update(user.sub, input);
     return {
       status: 200,
       message: 'Review updated successfully',
@@ -132,7 +132,7 @@ export class ReviewResolver {
     @CurrentUser() user: AuthUser,
     @Args('query', { nullable: true }) query?: ReviewQueryInput,
   ): Promise<ReviewListResponse> {
-    const data = await this.reviewService.findByUser(user._id, query ?? {});
+    const data = await this.reviewService.findByUser(user.sub, query ?? {});
     return {
       status: 200,
       message: 'My reviews fetched successfully',

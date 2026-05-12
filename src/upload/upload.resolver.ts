@@ -130,7 +130,7 @@ export class UploadResolver {
   @UseGuards(GqlAuthGuard)
   @Mutation(() => Boolean)
   async deleteAvatar(@CurrentUser() user): Promise<boolean> {
-    const existingUser = await this.userService.findById(user._id);
+    const existingUser = await this.userService.findById(user.sub);
 
     if (!existingUser.avatarPublicId) {
       return false; // nothing to delete
@@ -139,7 +139,7 @@ export class UploadResolver {
     //  Only deletes the avatar belonging to the authenticated user
     await this.uploadService.deleteByPublicId(existingUser.avatarPublicId);
 
-    await this.userService.updateAvatar(user._id, {
+    await this.userService.updateAvatar(user.sub, {
       // avatar: null,
       avatarPublicId: null,
     });

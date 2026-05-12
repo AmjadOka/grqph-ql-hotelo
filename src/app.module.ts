@@ -15,6 +15,8 @@ import * as redisStore from 'cache-manager-redis-store';
 import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ReviewModule } from './review/review.module';
+import { NotificationModule } from './notification/notification.module';
+import { BullModule } from '@nestjs/bullmq';
 
 @Module({
   imports: [
@@ -38,7 +40,12 @@ import { ReviewModule } from './review/review.module';
       port: 6379,
       ttl: 60,
     }),
-
+    BullModule.forRoot({
+      connection: {
+        host: process.env.REDIS_HOST,
+        port: Number(process.env.REDIS_PORT),
+      },
+    }),
     GraphQLModule.forRoot<MercuriusDriverConfig>({
       driver: MercuriusDriver,
       autoSchemaFile: 'schema.gql',
@@ -59,6 +66,7 @@ import { ReviewModule } from './review/review.module';
     SettingsModule,
     UploadModule,
     ReviewModule,
+    NotificationModule,
   ],
 })
 export class AppModule {}

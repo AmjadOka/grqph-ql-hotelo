@@ -21,9 +21,8 @@ import { UpdateBookingInput } from './dto/update-booking.input';
 import { buildQuery, PaginatedResult } from '../common/utils/query-builder';
 import { BookingListResponse } from './dto/booking-response.dto';
 import type { AuthUser } from 'src/common/types/AuthUser';
-import { EventEmitter2 } from '@nestjs/event-emitter';
-import { BookingExpiredEvent } from 'src/common/events/booking-expired.event';
 
+import { BookingEventPublisher } from 'src/notification/events/booking-event.publisher';
 /* =====================================================
    CONSTANTS
 ===================================================== */
@@ -85,8 +84,7 @@ export class BookingService {
 
     @InjectModel(User.name)
     private readonly userModel: Model<User>,
-
-    private readonly eventEmitter: EventEmitter2,
+    private readonly bookingEvents: BookingEventPublisher,
   ) {}
 
   /* ─────────────────────────────────────────────────────
@@ -135,7 +133,7 @@ export class BookingService {
   }
 
   private assertOwnerOrPrivileged(booking: Booking, user: AuthUser): void {
-    if (!this.isBookingOwner(booking, user._id) && !this.isPrivileged(user)) {
+    if (!this.isBookingOwner(booking, user.sub) && !this.isPrivileged(user)) {
       throw new ForbiddenException('Access denied');
     }
   }
@@ -339,7 +337,6 @@ export class BookingService {
     }
 
     this.lastExpirySweep = now;
-
     const session = options?.session;
 
     const expiredBookings = await this.bookingModel
@@ -366,13 +363,10 @@ export class BookingService {
     );
 
     for (const booking of expiredBookings) {
-      this.eventEmitter.emit(
-        'booking.expired',
-        new BookingExpiredEvent(
-          booking._id.toString(),
-          booking.guestId.toString(),
-          booking.cabinId.toString(),
-        ),
+      this.bookingEvents.expired(
+        booking.id.toString(),
+        booking.guestId.toString(),
+        booking.cabinId.toString(),
       );
     }
   }
@@ -414,8 +408,9 @@ export class BookingService {
       const [booking] = await this.bookingModel.create(
         [
           {
-            guestId: user._id,
+            guestId: user.id,
             cabinId: cabin._id,
+            cabinName: cabin.name,
             startDate: start,
             endDate: end,
             numGuests,
@@ -432,7 +427,14 @@ export class BookingService {
         ],
         { session },
       );
-
+      this.bookingEvents.created({
+        bookingId: booking.id.toString(),
+        userId: guestId.toString(),
+        cabinName: booking.cabinName,
+        startDate: booking.startDate.toISOString().split('T')[0],
+        endDate: booking.endDate.toISOString().split('T')[0],
+        totalPrice: booking.totalPrice,
+      });
       return booking;
     });
   }
@@ -444,7 +446,7 @@ export class BookingService {
   async findOne(id: string, user: AuthUser): Promise<Booking> {
     const booking = await this.findBookingOrFail(id);
 
-    if (!this.isPrivileged(user) && !this.isBookingOwner(booking, user._id)) {
+    if (!this.isPrivileged(user) && !this.isBookingOwner(booking, user.sub)) {
       throw new ForbiddenException('Access denied');
     }
 
@@ -457,7 +459,7 @@ export class BookingService {
 
   async findMyBookings(user: AuthUser): Promise<BookingListResponse> {
     const guestId =
-      typeof user._id === 'string' ? new Types.ObjectId(user._id) : user._id;
+      typeof user.sub === 'string' ? new Types.ObjectId(user.sub) : user.sub;
 
     const bookings = await this.bookingModel
       .find({ guestId })
@@ -595,10 +597,15 @@ export class BookingService {
         reason ??
         (cancelledByAdmin ? 'Cancelled by admin' : 'Cancelled by guest');
       booking.cancelledAt = new Date();
-      booking.cancelledBy = new Types.ObjectId(user._id);
+      booking.cancelledBy = new Types.ObjectId(user.sub);
 
       await booking.save({ session });
-
+      this.bookingEvents.cancelled({
+        bookingId: booking._id.toString(),
+        userId: booking.guestId.toString(),
+        cabinName: booking.cabinName,
+        reason: booking.cancelReason,
+      });
       return booking;
     });
   }
@@ -633,6 +640,12 @@ export class BookingService {
     booking.paymentStatus = PaymentStatus.PAID;
     await booking.save();
 
+    this.bookingEvents.confirmed({
+      bookingId: booking.id.toString(),
+      userId: booking.guestId.toString(),
+      cabinName: booking.cabinName,
+      startDate: booking.startDate.toISOString().split('T')[0],
+    });
     return booking;
   }
 
@@ -703,7 +716,11 @@ export class BookingService {
     const booking = await this.findBookingOrFail(id);
 
     this.assertStatus(booking, BookingStatus.CONFIRMED);
-
+    if (isBefore(booking.endDate, new Date())) {
+      throw new BadRequestException(
+        'cannot mark no show before locked end date',
+      );
+    }
     booking.status = BookingStatus.NO_SHOW;
     booking.active = false;
 
@@ -781,7 +798,7 @@ export class BookingService {
       available: conflicts.length === 0,
       requestedRange: { startDate: start, endDate: end },
       conflicts: conflicts.map((c) => ({
-        bookingId: (c._id as Types.ObjectId).toString(),
+        bookingId: c._id.toString(),
         startDate: c.startDate,
         endDate: c.endDate,
         status: c.status,

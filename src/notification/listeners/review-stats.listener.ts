@@ -4,9 +4,9 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 
-import { ReviewEvents } from '../events/review.event';
-import { CabinCacheKeys } from '../utils/cache/cache-keys';
-import { ReviewChangedEvent } from '../events/review-changed.event';
+import { ReviewEvents } from '../../notification/events/review.event';
+import { CabinCacheKeys } from 'src/common/utils/cache/cache-keys';
+import { ReviewChangedEvent } from '../../notification/events/review-changed.event';
 import { CabinStatsService } from '../services/cabin-stats.service';
 
 @Injectable()

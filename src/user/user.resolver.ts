@@ -91,8 +91,8 @@ export class UserResolver {
   @UseGuards(GqlAuthGuard)
   @Query(() => User)
   @UseGuards(GqlAuthGuard)
-  findMe(@CurrentUser() user: { _id: string; role: UserRole }) {
-    return this.userService.findMe(user._id);
+  findMe(@CurrentUser() user: AuthUser) {
+    return this.userService.findMe(user.sub);
   }
 
   /**

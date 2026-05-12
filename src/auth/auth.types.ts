@@ -7,8 +7,10 @@ import { UserRole } from 'src/user/user.schema';
  * Never includes: password, refreshTokenHash, resetCode, or any reset fields.
  */
 export interface SafeUser {
-  _id: string;
+  id: string;
   email: string;
   fullName: string;
   role: UserRole;
+  avatar: string | undefined;
+  active: boolean;
 }

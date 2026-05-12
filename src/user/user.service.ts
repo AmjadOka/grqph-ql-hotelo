@@ -167,10 +167,12 @@ export class UserService {
    * @returns Updated user document
    */
   async update(id: string, input: UpdateUserInput) {
+    console.log(input);
     const user = await this.userModel.findById(id);
     // Remove any undefined fields
     Object.keys(input).forEach((key) => {
-      if (input[key] === undefined) {
+      if (input[key] === undefined || input[key].length < 1) {
+        console.log(input[key]);
         delete input[key];
       }
     });

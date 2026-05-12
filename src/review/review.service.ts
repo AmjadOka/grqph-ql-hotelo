@@ -16,10 +16,10 @@ import { buildQuery, BaseQuery } from 'src/common/utils/query-builder';
 import { UserRole } from 'src/user/user.schema';
 import { UpdateReviewInput } from './dto/update-review.input';
 import { CreateReviewInput } from './dto/create-review.input';
-import { reviewListIndexKey } from '../common/listeners/review-stats.listener';
+import { reviewListIndexKey } from 'src/notification/listeners/review-stats.listener';
 import { ReviewQueryInput } from './dto/review-query.input';
 import type { AuthUser } from 'src/common/types/AuthUser';
-import { ReviewEventPublisher } from 'src/common/events/review-event.publisher';
+import { ReviewEventPublisher } from 'src/notification/events/review-event.publisher';
 import { Booking, BookingStatus } from 'src/booking/booking.schema';
 
 /** Cache TTL for review lists (seconds) */
@@ -203,7 +203,7 @@ export class ReviewService {
     if (!foundReview) throw new NotFoundException('Review not found');
 
     if (
-      foundReview.userId.toString() !== user._id &&
+      foundReview.userId.toString() !== user.sub &&
       user.role !== UserRole.MANAGER
     ) {
       throw new ForbiddenException('Not allowed');

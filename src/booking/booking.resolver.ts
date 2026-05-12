@@ -180,8 +180,7 @@ export class BookingResolver {
     @Args('input') input: CreateBookingInput,
     @CurrentUser() user: AuthUser,
   ): Promise<BookingResponse> {
-    const booking = await this.bookingService.create(input, user._id);
-
+    const booking = await this.bookingService.create(input, user.sub);
     return {
       status: 201,
       message: 'Booking created successfully',

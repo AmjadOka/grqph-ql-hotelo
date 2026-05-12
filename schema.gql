@@ -56,12 +56,21 @@ type UsersResponse {
   meta: UserMeta!
 }
 
+type SafeUser {
+  id: String!
+  email: String!
+  fullName: String!
+  role: UserRole!
+  avatar: String!
+  active: Boolean!
+}
+
 type AuthResponse {
   status: Int!
   message: String!
   accessToken: String
   refreshToken: String
-  data: User
+  data: SafeUser
 }
 
 type MessageResponse {
@@ -73,6 +82,7 @@ type Booking {
   id: ID!
   cabinId: ID!
   cabin: Cabin
+  cabinName: String!
   guestId: ID!
   guest: User
   startDate: DateTime!
@@ -153,6 +163,38 @@ type DeleteResponse {
   id: ID
 }
 
+type Notification {
+  userId: ID!
+  type: NotificationType!
+  title: String!
+  body: String!
+  read: Boolean!
+  link: String
+  createdAt: DateTime!
+}
+
+enum NotificationType {
+  BOOKING_CREATED
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  BOOKING_REMINDER
+  BOOKING_EXPIRED
+  PASSWORD_RESET
+  WELCOME
+  PAYMENT_RECEIVED
+}
+
+type Review {
+  id: ID!
+  bookingId: ID!
+  userId: ID!
+  cabinId: ID!
+  rating: Int!
+  comment: String
+  isEdited: Boolean!
+  updatedAt: DateTime
+}
+
 type Settings {
   _id: ID!
   minBookingLength: Int!
@@ -165,17 +207,6 @@ type UploadResponse {
   url: String!
   publicId: String!
   folder: String!
-}
-
-type Review {
-  id: ID!
-  bookingId: ID!
-  userId: ID!
-  cabinId: ID!
-  rating: Int!
-  comment: String
-  isEdited: Boolean!
-  updatedAt: DateTime
 }
 
 type ReviewMeta {
@@ -225,6 +256,8 @@ type Query {
   myBookings: BookingListResponse!
   booking(id: ID!): BookingResponse!
   allBookings(query: BookingQueryInput): BookingListResponse!
+  myNotifications: [Notification!]!
+  unreadNotificationCount: Int!
   settings: Settings!
 
   """Get paginated reviews for a specific cabin (public)"""
@@ -293,7 +326,7 @@ type Mutation {
   signUp(input: SignUpInput!): AuthResponse!
   login(input: SignInInput!): AuthResponse!
   refreshToken(refreshToken: String!): AuthResponse!
-  logout(userId: String!): MessageResponse!
+  logout: MessageResponse!
   resetPassword(input: ResetPasswordInput!): MessageResponse!
   verifyCode(input: VerifyCodeInput!): MessageResponse!
   changePassword(input: ChangePasswordInput!): MessageResponse!
@@ -304,6 +337,8 @@ type Mutation {
   checkIn(id: ID!): BookingResponse!
   checkOut(id: ID!): BookingResponse!
   markNoShow(id: ID!): BookingResponse!
+  markNotificationRead(id: String!): Notification!
+  markAllNotificationsRead: Boolean!
   updateSettings(input: UpdateSettingsInput!): Settings!
   uploadCabinImage(file: Upload!): UploadResponse!
   uploadFiles(files: [Upload!]!): [String!]!

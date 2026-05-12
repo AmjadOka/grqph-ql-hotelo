@@ -1,6 +1,7 @@
 import { UserRole } from 'src/user/user.schema';
 
 export type AuthUser = {
-  _id: string;
+  sub: string;
   role: UserRole;
+  type: 'access' | 'refresh';
 };

@@ -83,6 +83,9 @@ export class Booking extends Document {
   @Field(() => Cabin, { nullable: true })
   cabin?: Cabin;
 
+  @Field()
+  @Prop({ required: true })
+  cabinName: string;
   /** The guest who made the booking.  Resolved via UserLoader in the resolver. */
   @Field(() => ID)
   @Prop({

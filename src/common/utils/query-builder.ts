@@ -130,9 +130,7 @@ export async function buildQuery<
   /* ─────────────────────────────
      RESPONSE
   ───────────────────────────── */
-  console.log(data, 'datahhh');
-  console.log(total, '98765');
-  console.log(mongoFilter, 'mongoFilter');
+
   return {
     data: data.map((item) => ({
       ...item,
